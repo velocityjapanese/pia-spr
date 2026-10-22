@@ -1,0 +1,28 @@
+# Environment & credentials
+.env
+.env.local
+token_*.json
+credentials.json
+client_secrets.json
+
+# Heavy media & renders
+output/
+*.mp4
+*.wav
+*.mid
+*.xml
+*.svg
+temp_*
+
+# SoundFonts > 100MB (GitHub 100MB limit)
+soundfonts/Yamaha_Grand.sf2
+
+# Python
+__pycache__/
+*.py[cod]
+.venv
+venv/
+
+# OS specific
+.DS_Store
+Thumbs.db

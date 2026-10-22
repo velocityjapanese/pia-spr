@@ -1,0 +1,111 @@
+name: PianoSpheric Daily Long-Form Automation
+
+on:
+  schedule:
+    # Runs daily at 9:00 AM UTC
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+    inputs:
+      upload_youtube:
+        description: 'Upload to YouTube? (auto = Mon/Wed/Fri, true = force yes, false = force skip)'
+        required: false
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - 'true'
+          - 'false'
+      duration_minutes:
+        description: 'Target video duration in minutes (default: 15)'
+        required: false
+        default: '15'
+
+permissions:
+  contents: write
+
+jobs:
+  publish-piano-video:
+    runs-on: windows-latest
+    timeout-minutes: 180
+
+    env:
+      YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+      YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+      YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+      YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+      YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+      YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+      POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
+      CHANNEL_NAME: ${{ secrets.CHANNEL_NAME }}
+      FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+      FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
+      FACEBOOK_PAGE_ID: ${{ secrets.FACEBOOK_PAGE_ID }}
+      FACEBOOK_PAGE_ACCESS_TOKEN: ${{ secrets.FACEBOOK_PAGE_ACCESS_TOKEN }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Ensure SoundFont available
+        run: |
+          if (-not (Test-Path "soundfonts\Yamaha_Grand.sf2") -and (Test-Path "soundfonts\TimGM6mb.sf2")) {
+            Copy-Item "soundfonts\TimGM6mb.sf2" "soundfonts\Yamaha_Grand.sf2"
+          }
+
+      - name: Check YouTube Upload Schedule (Mon / Wed / Fri)
+        id: schedule_check
+        run: |
+          $choice = "${{ github.event.inputs.upload_youtube }}"
+          if ($choice -eq "true") {
+            Write-Output "should_upload=true" >> $env:GITHUB_OUTPUT
+            Write-Host "Manual override: YouTube forced to TRUE"
+          } elseif ($choice -eq "false") {
+            Write-Output "should_upload=false" >> $env:GITHUB_OUTPUT
+            Write-Host "Manual override: YouTube forced to FALSE"
+          } else {
+            $dow = (Get-Date).ToUniversalTime().DayOfWeek
+            if ($dow -eq [DayOfWeek]::Monday -or $dow -eq [DayOfWeek]::Wednesday -or $dow -eq [DayOfWeek]::Friday) {
+              Write-Output "should_upload=true" >> $env:GITHUB_OUTPUT
+              Write-Host "Scheduled Day ($dow): YouTube upload ENABLED"
+            } else {
+              Write-Output "should_upload=false" >> $env:GITHUB_OUTPUT
+              Write-Host "Off-Day ($dow): YouTube upload SKIPPED (Facebook will still run)"
+            }
+          }
+
+      - name: Run Automation Pipeline (15-Minute 1080p Video)
+        env:
+          UPLOAD_YOUTUBE: ${{ steps.schedule_check.outputs.should_upload }}
+        run: |
+          $mins = "${{ github.event.inputs.duration_minutes }}"
+          if (-not $mins) { $mins = "15" }
+          Write-Host "Starting PianoSpheric $mins-Minute Publishing Pipeline..."
+          python auto_pipeline.py --minutes $mins
+
+      - name: Commit published videos log
+        if: always()
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add published_videos.json
+          $diff = git diff --staged --quiet
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "No changes to published_videos.json to commit."
+          } else {
+            git commit -m "chore: update published videos log [skip ci]"
+            git push origin main
+          }

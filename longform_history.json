@@ -1,0 +1,26 @@
+[
+  {
+    "timestamp": "20261022_121247",
+    "title": "Infinite Nocturne in D Minor",
+    "bars": 16,
+    "duration_sec": 49.48,
+    "output_file": "D:\\E agy cli\\E youtube bots\\piano_longform_bot\\output\\longform_sample_16x9.mp4",
+    "export_copy": "D:\\E agy cli\\E youtube bots\\FINAL_EXPORTED_VIDEOS\\longform_sample_16x9.mp4"
+  },
+  {
+    "timestamp": "20261022_132039",
+    "title": "3 Minutes of Relaxing Piano Suite",
+    "bars": 16,
+    "duration_sec": 130.24,
+    "output_file": "D:\\E agy cli\\E youtube bots\\piano_longform_bot\\output\\suite_sample_3min.mp4",
+    "export_copy": "D:\\E agy cli\\E youtube bots\\FINAL_EXPORTED_VIDEOS\\suite_sample_3min.mp4"
+  },
+  {
+    "timestamp": "20261022_140241",
+    "title": "Eb Minor - Infinite Reverie",
+    "bars": 16,
+    "duration_sec": 39.1,
+    "output_file": "D:\\E agy cli\\E youtube bots\\piano_longform_bot\\output\\synced_score_sample.mp4",
+    "export_copy": "D:\\E agy cli\\E youtube bots\\FINAL_EXPORTED_VIDEOS\\synced_score_sample.mp4"
+  }
+]
