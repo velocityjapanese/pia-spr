@@ -1,8 +1,10 @@
 """
 High-CTR YouTube Thumbnail Generator for PianoSpheric (1280x720)
-Generates cinematic, aesthetic thumbnails with glowing hooks and branding badge.
+Generates cinematic, aesthetic thumbnails with mathematically bounded text containers,
+vector icons (zero broken glyphs/emojis), and official brand styling.
 """
 import os
+import math
 import random
 import subprocess
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance
@@ -11,28 +13,28 @@ PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 PIANO_HOOKS = [
     {
-        "kicker": "★ 15 MIN RELAXING PIANO SUITE",
+        "kicker": "15 MIN RELAXING PIANO SUITE",
         "title1": "DEEP SLEEP",
         "title2": "& PEACE",
         "sub": "Stress Relief · Meditation · Deep Focus",
         "badge": "432Hz COSMIC HARMONY"
     },
     {
-        "kicker": "✨ 15 MINUTES TO RESET YOUR MIND",
+        "kicker": "15 MINUTES TO RESET YOUR MIND",
         "title1": "CALM YOUR",
         "title2": "MIND & SOUL",
         "sub": "Deep Focus · Anxiety Relief · Sleep",
         "badge": "CALM & SERENITY"
     },
     {
-        "kicker": "🌙 CELESTIAL PIANO DREAMS",
+        "kicker": "CELESTIAL PIANO DREAMS",
         "title1": "PEACEFUL",
         "title2": "REVERIE",
         "sub": "Atmospheric Melodies for Deep Rest",
         "badge": "PURE HARMONY"
     },
     {
-        "kicker": "🌌 INFINITE FALLING NOTES",
+        "kicker": "INFINITE FALLING NOTES",
         "title1": "COSMIC",
         "title2": "SERENITY",
         "sub": "Healing Frequencies · Rest & Heal",
@@ -40,19 +42,29 @@ PIANO_HOOKS = [
     }
 ]
 
+def draw_star(draw, cx, cy, r_out, r_in, fill):
+    """Draws a crisp geometric 5-point star vector."""
+    pts = []
+    for i in range(10):
+        angle = i * (math.pi / 5) - (math.pi / 2)
+        r = r_out if i % 2 == 0 else r_in
+        pts.append((cx + r * math.cos(angle), cy + r * math.sin(angle)))
+    draw.polygon(pts, fill=fill)
+
 def create_pianospheric_thumbnail(video_path, output_thumb_path, hook_dict=None):
     """
-    Extracts a pristine frame from the piano visualizer, applies cinematic enhancements,
-    and composites the PianoSpheric logo badge, glowing accents, and high-CTR text overlay.
+    Renders a mathematically bounded, flawless 1280x720 thumbnail:
+    - Text is strictly contained inside containers with generous padding
+    - Vector stars and dots replace unreliable Unicode emoji symbols
+    - Visualizer background enhanced with cinematic lighting
     """
     os.makedirs(os.path.dirname(os.path.abspath(output_thumb_path)), exist_ok=True)
     temp_frame = output_thumb_path.replace('.jpg', '_raw.jpg')
 
-    # If an unobstructed _viz.mp4 exists, extract from that for zero-clutter background
+    # Prefer raw visualizer video if available for clean, non-cluttered background
     viz_candidate = video_path.replace('.mp4', '_viz.mp4')
     source_video = viz_candidate if os.path.exists(viz_candidate) else video_path
 
-    # Extract dynamic frame at 12s (where notes & keys are radiant)
     cmd = [
         'ffmpeg', '-y',
         '-ss', '00:00:12',
@@ -68,7 +80,6 @@ def create_pianospheric_thumbnail(video_path, output_thumb_path, hook_dict=None)
     else:
         base_img = Image.new('RGBA', (1920, 1080), (10, 12, 18, 255))
 
-    # Resize to standard YouTube thumbnail (1280x720) & enhance
     img = base_img.resize((1280, 720), Image.Resampling.LANCZOS)
     img = ImageEnhance.Color(img).enhance(1.3)
     img = ImageEnhance.Contrast(img).enhance(1.18)
@@ -76,93 +87,156 @@ def create_pianospheric_thumbnail(video_path, output_thumb_path, hook_dict=None)
     overlay = Image.new('RGBA', (1280, 720), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
-    # 1. Cinematic Gradient Vignette (creates dark contrast for text on left, keeps glowing keyboard on right)
-    for x in range(780):
-        alpha = int(225 * (1.0 - (x / 780)**1.25))
+    # 1. Cinematic Left Gradient (creates dark space for text readability while keeping keys glowing)
+    for x in range(800):
+        alpha = int(230 * (1.0 - (x / 800)**1.3))
         draw.line([(x, 0), (x, 720)], fill=(8, 10, 16, alpha))
-
     for y in range(160):
         alpha = int(140 * (1.0 - (y / 160)))
         draw.line([(0, y), (1280, y)], fill=(8, 10, 16, alpha))
 
-    # 2. Select hook
+    # 2. Fonts
+    font_bold = "C:/Windows/Fonts/segoeuib.ttf"
+    font_reg = "C:/Windows/Fonts/segoeui.ttf"
+    font_serif = "C:/Windows/Fonts/georgia.ttf"
+
+    f_brand = ImageFont.truetype(font_bold, 22)
+    f_kicker = ImageFont.truetype(font_bold, 22)
+    f_main = ImageFont.truetype(font_bold, 64)
+    f_sub = ImageFont.truetype(font_serif, 26)
+    f_badge = ImageFont.truetype(font_bold, 16)
+
+    # 3. Brand Pill (Top Left)
+    brand_text = "PianoSpheric"
+    b_bbox = draw.textbbox((0, 0), brand_text, font=f_brand)
+    b_tw = b_bbox[2] - b_bbox[0]
+    b_th = b_bbox[3] - b_bbox[1]
+
+    logo_path = os.path.join(PROJECT_DIR, 'assets', 'logo.png')
+    logo_size = 40
+    b_pad_l = 14
+    gap_logo = 12
+    gap_badge = 10
+    badge_d = 16
+    b_pad_r = 20
+
+    pill_w = b_pad_l + logo_size + gap_logo + b_tw + gap_badge + badge_d + b_pad_r
+    pill_h = 56
+    pill_x = 45
+    pill_y = 35
+
+    draw.rounded_rectangle((pill_x, pill_y, pill_x + pill_w, pill_y + pill_h), radius=28, fill=(10, 12, 18, 240), outline=(255, 195, 50, 190), width=2)
+
+    if os.path.exists(logo_path):
+        logo = Image.open(logo_path).convert('RGBA').resize((logo_size, logo_size), Image.Resampling.LANCZOS)
+        mask = Image.new('L', (logo_size, logo_size), 0)
+        ImageDraw.Draw(mask).ellipse((0, 0, logo_size, logo_size), fill=255)
+        logo_c = Image.new('RGBA', (logo_size, logo_size), (0, 0, 0, 0))
+        logo_c.paste(logo, (0, 0), mask=mask)
+        overlay.alpha_composite(logo_c, (pill_x + b_pad_l, pill_y + (pill_h - logo_size) // 2))
+        draw.ellipse((pill_x + b_pad_l - 1, pill_y + (pill_h - logo_size) // 2 - 1, pill_x + b_pad_l + logo_size + 1, pill_y + (pill_h - logo_size) // 2 + logo_size + 1), outline=(255, 195, 50, 240), width=1)
+
+    tx = pill_x + b_pad_l + logo_size + gap_logo
+    ty = pill_y + (pill_h - b_th) // 2 - b_bbox[1]
+    draw.text((tx, ty), brand_text, font=f_brand, fill=(255, 255, 255, 255))
+
+    vx = tx + b_tw + gap_badge
+    vy = pill_y + (pill_h - badge_d) // 2
+    draw.ellipse((vx, vy, vx + badge_d, vy + badge_d), fill=(29, 155, 240, 255))
+    draw.line((vx + 4, vy + 8, vx + 7, vy + 11), fill=(255, 255, 255, 255), width=2)
+    draw.line((vx + 7, vy + 11, vx + 12, vy + 5), fill=(255, 255, 255, 255), width=2)
+
+    # 4. Top Right Frequency / Mood Badge (Mathematically Bounded)
     if not hook_dict:
         hook_dict = random.choice(PIANO_HOOKS)
 
-    font_bold = "C:/Windows/Fonts/segoeuib.ttf"
-    font_serif = "C:/Windows/Fonts/georgia.ttf"
+    top_badge_text = hook_dict.get("badge", "432Hz COSMIC HARMONY")
+    tb_bbox = draw.textbbox((0, 0), top_badge_text, font=f_badge)
+    tb_tw = tb_bbox[2] - tb_bbox[0]
+    tb_th = tb_bbox[3] - tb_bbox[1]
 
-    f_brand = ImageFont.truetype(font_bold, 24)
-    f_hook_top = ImageFont.truetype(font_bold, 24)
-    f_main = ImageFont.truetype(font_bold, 64)
-    f_sub = ImageFont.truetype(font_serif, 28)
-    f_badge = ImageFont.truetype(font_bold, 17)
+    tb_pad_l = 18
+    tb_dot_d = 10
+    tb_gap = 10
+    tb_pad_r = 22
+    tb_w = tb_pad_l + tb_dot_d + tb_gap + tb_tw + tb_pad_r
+    tb_h = 46
+    tb_x2 = 1235
+    tb_x1 = tb_x2 - tb_w
+    tb_y = 40
 
-    # 3. Top Left Branding Pill with Circular Logo
-    logo_path = os.path.join(PROJECT_DIR, 'assets', 'logo.png')
-    brand_w = int(draw.textlength("PianoSpheric", font=f_brand)) + 92
-    draw.rounded_rectangle((45, 35, 45 + brand_w, 90), radius=28, fill=(10, 12, 18, 235), outline=(255, 195, 50, 190), width=2)
-    
-    if os.path.exists(logo_path):
-        logo = Image.open(logo_path).convert('RGBA').resize((40, 40), Image.Resampling.LANCZOS)
-        mask = Image.new('L', (40, 40), 0)
-        ImageDraw.Draw(mask).ellipse((0, 0, 40, 40), fill=255)
-        logo_c = Image.new('RGBA', (40, 40), (0, 0, 0, 0))
-        logo_c.paste(logo, (0, 0), mask=mask)
-        overlay.alpha_composite(logo_c, (56, 42))
-        draw.ellipse((55, 41, 97, 83), outline=(255, 195, 50, 240), width=2)
-        # Verified badge
-        bv_x = 45 + brand_w - 24
-        draw.ellipse((bv_x - 7, 62 - 7, bv_x + 7, 62 + 7), fill=(29, 155, 240, 255))
-        draw.line((bv_x - 3, 62, bv_x - 1, 65), fill=(255, 255, 255, 255), width=2)
-        draw.line((bv_x - 1, 65, bv_x + 4, 59), fill=(255, 255, 255, 255), width=2)
-        tx = 108
-    else:
-        tx = 70
-    draw.text((tx, 48), "PianoSpheric", font=f_brand, fill=(255, 255, 255, 255))
+    draw.rounded_rectangle((tb_x1, tb_y, tb_x2, tb_y + tb_h), radius=23, fill=(10, 12, 18, 235), outline=(255, 195, 50, 180), width=2)
 
-    # 4. Top Right Frequency / Mood Badge
-    badge_text = hook_dict.get("badge", "432Hz COSMIC HARMONY")
-    bw = int(draw.textlength(badge_text, font=f_badge)) + 36
-    draw.rounded_rectangle((1235 - bw, 38, 1235, 84), radius=23, fill=(10, 12, 18, 230), outline=(255, 195, 50, 180), width=2)
-    draw.ellipse((1235 - bw + 16, 56, 1235 - bw + 26, 66), fill=(255, 195, 50, 255))
-    draw.text((1235 - bw + 34, 49), badge_text, font=f_badge, fill=(255, 220, 110, 255))
+    dot_x = tb_x1 + tb_pad_l
+    dot_y = tb_y + (tb_h - tb_dot_d) // 2
+    draw.ellipse((dot_x, dot_y, dot_x + tb_dot_d, dot_y + tb_dot_d), fill=(255, 195, 50, 255))
 
-    # 5. Center-Left Main Typography Card & Hooks
-    card_y = 180
+    tb_tx = dot_x + tb_dot_d + tb_gap
+    tb_ty = tb_y + (tb_h - tb_th) // 2 - tb_bbox[1]
+    draw.text((tb_tx, tb_ty), top_badge_text, font=f_badge, fill=(255, 220, 110, 255))
 
-    # Kicker / Topic Pill
-    kicker_text = hook_dict.get("kicker", "★ 15 MIN RELAXING PIANO SUITE")
-    kw = int(draw.textlength(kicker_text, font=f_hook_top)) + 36
-    draw.rounded_rectangle((50, card_y, 50 + kw, card_y + 48), radius=12, fill=(255, 195, 50, 235))
-    draw.text((68, card_y + 9), kicker_text, font=f_hook_top, fill=(10, 12, 18, 255))
+    # 5. Kicker Pill with Geometric Vector Star
+    kicker_text = hook_dict.get("kicker", "15 MIN RELAXING PIANO SUITE")
+    k_bbox = draw.textbbox((0, 0), kicker_text, font=f_kicker)
+    k_tw = k_bbox[2] - k_bbox[0]
+    k_th = k_bbox[3] - k_bbox[1]
 
-    # Massive Main Title Line 1 & Line 2
-    t_y = card_y + 70
+    k_pad_l = 20
+    k_star_w = 16
+    k_gap = 12
+    k_pad_r = 24
+    k_w = k_pad_l + k_star_w + k_gap + k_tw + k_pad_r
+    k_h = 46
+    k_x = 55
+    k_y = 180
+
+    draw.rounded_rectangle((k_x, k_y, k_x + k_w, k_y + k_h), radius=12, fill=(255, 195, 50, 240))
+
+    star_cx = k_x + k_pad_l + k_star_w // 2
+    star_cy = k_y + k_h // 2
+    draw_star(draw, star_cx, star_cy, 8, 3.5, (10, 12, 18, 255))
+
+    k_tx = k_x + k_pad_l + k_star_w + k_gap
+    k_ty = k_y + (k_h - k_th) // 2 - k_bbox[1]
+    draw.text((k_tx, k_ty), kicker_text, font=f_kicker, fill=(10, 12, 18, 255))
+
+    # 6. Massive Main Title with Deep 3D Shadow
     t1 = hook_dict.get("title1", "DEEP SLEEP")
     t2 = hook_dict.get("title2", "& PEACE")
 
+    t_y = k_y + 70
     for ox, oy in [(-3, -3), (3, -3), (-3, 3), (3, 3), (0, 5), (0, 7)]:
-        draw.text((50 + ox, t_y + oy), t1, font=f_main, fill=(0, 0, 0, 240))
-    draw.text((50, t_y), t1, font=f_main, fill=(255, 255, 255, 255))
+        draw.text((55 + ox, t_y + oy), t1, font=f_main, fill=(0, 0, 0, 240))
+    draw.text((55, t_y), t1, font=f_main, fill=(255, 255, 255, 255))
 
-    t_y2 = t_y + 72
+    t_y2 = t_y + 74
     for ox, oy in [(-3, -3), (3, -3), (-3, 3), (3, 3), (0, 5), (0, 7)]:
-        draw.text((50 + ox, t_y2 + oy), t2, font=f_main, fill=(0, 0, 0, 240))
-    draw.text((50, t_y2), t2, font=f_main, fill=(255, 215, 90, 255))
+        draw.text((55 + ox, t_y2 + oy), t2, font=f_main, fill=(0, 0, 0, 240))
+    draw.text((55, t_y2), t2, font=f_main, fill=(255, 215, 90, 255))
 
-    # Subtitle line
+    # 7. Subtitle
+    sub_text = hook_dict.get("sub", "Stress Relief · Meditation · Deep Focus")
     sub_y = t_y2 + 82
-    sub = hook_dict.get("sub", "Stress Relief · Meditation · Deep Focus")
-    draw.text((53, sub_y + 2), sub, font=f_sub, fill=(0, 0, 0, 210))
-    draw.text((52, sub_y), sub, font=f_sub, fill=(225, 230, 240, 245))
+    draw.text((57, sub_y + 2), sub_text, font=f_sub, fill=(0, 0, 0, 220))
+    draw.text((55, sub_y), sub_text, font=f_sub, fill=(230, 235, 245, 255))
 
-    # 6. Bottom Right Duration Badge
-    draw.rounded_rectangle((1080, 640, 1235, 685), radius=10, fill=(10, 12, 18, 230), outline=(255, 255, 255, 80), width=1)
-    draw.text((1095, 648), "15:00 · 1080p HD", font=f_badge, fill=(255, 255, 255, 240))
+    # 8. Bottom Right Duration Badge
+    dur_text = "15:00 · 1080p HD"
+    d_bbox = draw.textbbox((0, 0), dur_text, font=f_badge)
+    d_tw = d_bbox[2] - d_bbox[0]
+    d_th = d_bbox[3] - d_bbox[1]
 
-    # 7. Luxury Outer Golden Border Framing
-    draw.rectangle([(0, 0), (1279, 719)], outline=(255, 195, 50, 120), width=3)
+    d_w = d_tw + 36
+    d_h = 42
+    d_x2 = 1235
+    d_x1 = d_x2 - d_w
+    d_y = 640
+
+    draw.rounded_rectangle((d_x1, d_y, d_x2, d_y + d_h), radius=10, fill=(10, 12, 18, 235), outline=(255, 255, 255, 100), width=1)
+    draw.text((d_x1 + 18, d_y + (d_h - d_th) // 2 - d_bbox[1]), dur_text, font=f_badge, fill=(255, 255, 255, 240))
+
+    # 9. Outer Framing Border
+    draw.rectangle([(0, 0), (1279, 719)], outline=(255, 195, 50, 130), width=3)
 
     final_thumb = Image.alpha_composite(img, overlay).convert('RGB')
     final_thumb.save(output_thumb_path, 'JPEG', quality=95)
@@ -170,7 +244,7 @@ def create_pianospheric_thumbnail(video_path, output_thumb_path, hook_dict=None)
     if os.path.exists(temp_frame):
         os.remove(temp_frame)
 
-    print(f"Generated High-CTR Masterpiece Thumbnail: {output_thumb_path}")
+    print(f"Generated Flawless Thumbnail: {output_thumb_path}")
     return output_thumb_path
 
 if __name__ == '__main__':
