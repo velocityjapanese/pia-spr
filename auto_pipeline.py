@@ -161,7 +161,7 @@ def should_publish_to_youtube(force_yt=None):
     else:
         return False, f"Off-Day ({day_name}): YouTube upload is SKIPPED (Facebook will still upload)."
 
-def run_pipeline(minutes=15, force_yt=None, dry_run=False):
+def run_pipeline(minutes=15, force_yt=None, dry_run=False, video_path=None):
     """
     Master execution pipeline.
     """
@@ -174,16 +174,20 @@ def run_pipeline(minutes=15, force_yt=None, dry_run=False):
     upload_yt, schedule_reason = should_publish_to_youtube(force_yt)
     print(f"[SCHEDULE] {schedule_reason}")
 
-    # Step 2: Render 15-Minute Video Suite
-    print(f"\n>>> [1/5] Rendering {minutes}-Minute Long-form Piano Suite...")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_name = f"PianoSpheric_{minutes}min_{timestamp}.mp4"
 
-    video_path = generate_longform_video(
-        mood='relaxing',
-        minutes=minutes,
-        output_filename=out_name
-    )
+    # Step 2: Render or Use Existing Video
+    if video_path and os.path.exists(video_path):
+        print(f"\n>>> [1/5] Using Existing Video File: {video_path}")
+        video_path = os.path.abspath(video_path)
+    else:
+        print(f"\n>>> [1/5] Rendering {minutes}-Minute Long-form Piano Suite...")
+        out_name = f"PianoSpheric_{minutes}min_{timestamp}.mp4"
+        video_path = generate_longform_video(
+            mood='relaxing',
+            minutes=minutes,
+            output_filename=out_name
+        )
 
     # Load chapters if generated
     chapters_txt = video_path.replace('.mp4', '_chapters.txt')
@@ -195,6 +199,11 @@ def run_pipeline(minutes=15, force_yt=None, dry_run=False):
                 if line and line[0].isdigit() and ':' in line[:5]:
                     parts = line.split(' ', 1)
                     chapters.append({"time": parts[0], "title": parts[1] if len(parts) > 1 else ""})
+    if not chapters:
+        chapters = [
+            {"time": "00:00", "title": "Movement I: Celestial Peace"},
+            {"time": "00:30", "title": "Movement II: Cosmic Reverie"}
+        ]
 
     # Step 3: Generate Thumbnail
     print(f"\n>>> [2/5] Creating 1280x720 Thumbnail...")
@@ -203,8 +212,8 @@ def run_pipeline(minutes=15, force_yt=None, dry_run=False):
 
     # Step 4: Generate SEO Metadata
     print(f"\n>>> [3/5] Generating SEO Metadata...")
-    song_title = f"{minutes} Minutes of Relaxing Piano Suite"
-    title, desc, tags = generate_seo_metadata(song_title, chapters, duration_mins=minutes)
+    song_title = f"{minutes} Minutes of Relaxing Piano Suite" if minutes > 1 else "Peaceful Cosmic Piano Suite"
+    title, desc, tags = generate_seo_metadata(song_title, chapters, duration_mins=max(1, minutes))
     print(f"  • Title: {title}")
 
     if dry_run:
@@ -258,6 +267,7 @@ if __name__ == '__main__':
     mins = 15
     force = None
     dry = "--dry-run" in sys.argv
+    vid_input = None
 
     if "--force-yt" in sys.argv:
         force = True
@@ -267,5 +277,7 @@ if __name__ == '__main__':
     for idx, arg in enumerate(sys.argv):
         if arg == "--minutes" and idx + 1 < len(sys.argv):
             mins = int(sys.argv[idx + 1])
+        elif arg == "--video" and idx + 1 < len(sys.argv):
+            vid_input = sys.argv[idx + 1]
 
-    run_pipeline(minutes=mins, force_yt=force, dry_run=dry)
+    run_pipeline(minutes=mins, force_yt=force, dry_run=dry, video_path=vid_input)

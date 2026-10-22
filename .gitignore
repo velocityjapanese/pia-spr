@@ -22,6 +22,7 @@ __pycache__/
 *.py[cod]
 .venv
 venv/
+published_videos.json
 
 # OS specific
 .DS_Store
