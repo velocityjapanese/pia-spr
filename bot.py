@@ -85,7 +85,7 @@ def generate_longform_video(mood='emotional', title=None, bars=16, tempo=None, m
 
     # Step 5: Video Compositing
     print("\n>>> Step 5/5: Compositing 16:9 Full HD Video (FFmpeg)...")
-    composite_longform_video(viz_path, score_input, audio_path, final_mp4, song_title=song_title, channel_name="Piano Spheric")
+    composite_longform_video(viz_path, score_input, audio_wav=audio_path, output_mp4=final_mp4, song_title=song_title, channel_name="PianoSpheric")
 
     # Export to FINAL_EXPORTED_VIDEOS
     export_copy = os.path.join(FINAL_EXPORT_DIR, os.path.basename(final_mp4))

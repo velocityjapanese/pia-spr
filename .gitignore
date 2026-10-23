@@ -23,6 +23,7 @@ __pycache__/
 .venv
 venv/
 published_videos.json
+longform_history.json
 
 # OS specific
 .DS_Store

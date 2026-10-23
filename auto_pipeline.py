@@ -191,6 +191,10 @@ def run_pipeline(minutes=15, force_yt=None, dry_run=False, video_path=None):
 
     # Load chapters if generated
     chapters_txt = video_path.replace('.mp4', '_chapters.txt')
+    chapters_export = os.path.join(FINAL_EXPORT_DIR, os.path.basename(video_path).replace('.mp4', '_chapters.txt'))
+    if not os.path.exists(chapters_txt) and os.path.exists(chapters_export):
+        chapters_txt = chapters_export
+
     chapters = []
     if os.path.exists(chapters_txt):
         with open(chapters_txt, 'r', encoding='utf-8') as f:

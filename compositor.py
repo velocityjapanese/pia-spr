@@ -4,10 +4,10 @@ from PIL import Image, ImageDraw, ImageFont
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-def create_longform_header(width=1920, height=120, channel_name="Piano Spheric", song_title="Original Composition - G Minor"):
+def create_longform_header(width=1920, height=120, channel_name="PianoSpheric", song_title="Original Composition - G Minor"):
     """
     Creates a modern, mathematically padded 16:9 YouTube video top overlay.
-    Left: Channel Branding Pill (Piano Spheric) with circular logo and verified badge.
+    Left: Channel Branding Pill (PianoSpheric) with circular logo and verified badge.
     Right: Song Title Pill with crystal-clear typography and guaranteed safe margins.
     """
     img = Image.new('RGBA', (width, height), (0, 0, 0, 0))
@@ -94,7 +94,7 @@ def create_longform_header(width=1920, height=120, channel_name="Piano Spheric",
 
     return img
 
-def composite_longform_video(viz_video, score_input, audio_wav, output_mp4, song_title="Original Composition • G Minor", channel_name="Piano Spheric"):
+def composite_longform_video(viz_video, score_input, audio_wav, output_mp4, song_title="Original Composition • G Minor", channel_name="PianoSpheric"):
     """
     Composites 16:9 Landscape YouTube Video:
     - 1920x1080 Fullscreen falling notes & 88-key piano
