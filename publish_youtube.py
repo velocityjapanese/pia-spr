@@ -23,12 +23,18 @@ load_dotenv()
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-def get_authenticated_service():
-    """Authenticate using refresh token from environment variables or local token file."""
+
+def _read_yt_triplet():
     client_id = (os.getenv("YOUTUBE_CLIENT_ID") or os.getenv("YT_CLIENT_ID", "")).strip()
     client_secret = (os.getenv("YOUTUBE_CLIENT_SECRET") or os.getenv("YT_CLIENT_SECRET", "")).strip()
     refresh_token = (os.getenv("YOUTUBE_REFRESH_TOKEN") or os.getenv("YT_REFRESH_TOKEN", "")).strip()
     token_uri = os.getenv("YOUTUBE_TOKEN_URI", "https://oauth2.googleapis.com/token").strip()
+    return client_id, client_secret, refresh_token, token_uri
+
+
+def get_authenticated_service():
+    """Authenticate using refresh token from environment variables or local token file."""
+    client_id, client_secret, refresh_token, token_uri = _read_yt_triplet()
 
     if not all([client_id, client_secret, refresh_token]):
         possible_token_paths = [
@@ -74,18 +80,67 @@ def get_authenticated_service():
         creds.refresh(Request())
     except Exception as e:
         if "invalid_grant" in str(e).lower():
-            print("\n❌ [youtube] AUTH ERROR: Refresh token has EXPIRED or been REVOKED.")
+            print("\n[youtube] AUTH ERROR: Refresh token has EXPIRED or been REVOKED.")
         raise
 
     return build("youtube", "v3", credentials=creds)
 
+
+def validate_youtube_credentials(timeout_sec=30):
+    """Fast pre-render auth check: refresh the OAuth token with a short timeout.
+
+    Returns (ok, reason). Never prints secret values. Used by the pipeline
+    preflight so a dead token fails in seconds instead of after a full render.
+    """
+    client_id, client_secret, refresh_token, token_uri = _read_yt_triplet()
+    if not all([client_id, client_secret, refresh_token]):
+        # Also accept the local token-file fallback used by get_authenticated_service.
+        for p in (Path(PROJECT_DIR) / "token_PianoSpheric.json",):
+            if p.exists():
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    client_id = client_id or data.get("client_id", "")
+                    client_secret = client_secret or data.get("client_secret", "")
+                    refresh_token = refresh_token or data.get("refresh_token", "")
+                    token_uri = data.get("token_uri", token_uri) or token_uri
+                    break
+                except Exception:
+                    pass
+    if not all([client_id, client_secret, refresh_token]):
+        return False, "missing YT_CLIENT_ID / YT_CLIENT_SECRET / YT_REFRESH_TOKEN"
+    creds = Credentials(
+        None,
+        refresh_token=refresh_token,
+        token_uri=token_uri,
+        client_id=client_id,
+        client_secret=client_secret,
+        scopes=["https://www.googleapis.com/auth/youtube"],
+    )
+    try:
+        import socket
+        old_timeout = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(timeout_sec)
+        try:
+            creds.refresh(Request())
+        finally:
+            socket.setdefaulttimeout(old_timeout)
+    except Exception as e:
+        msg = str(e).lower()
+        if "invalid_grant" in msg:
+            return False, "refresh token EXPIRED or REVOKED (invalid_grant) - reconnect YouTube OAuth and update secrets"
+        return False, f"token refresh failed: {e}"[:300]
+    return True, "token refresh OK"
+
+
 def upload_to_youtube(video_path, title, description, tags=None, category_id="10", privacy_status="public"):
     """
     Uploads long-form video to YouTube. Category 10 = Music.
+    Bounded resumable loop: fails loudly instead of hanging to the job timeout.
     """
     upload_yt = os.getenv("UPLOAD_YOUTUBE", "true").lower()
     if upload_yt in ("false", "0", "no"):
-        print("[youtube] ⏸️ Skipping YouTube upload (UPLOAD_YOUTUBE=false).")
+        print("[youtube] Skipping YouTube upload (UPLOAD_YOUTUBE=false).")
         return None
 
     if tags is None:
@@ -124,9 +179,25 @@ def upload_to_youtube(video_path, title, description, tags=None, category_id="10
         media_body=media
     )
 
+    try:
+        max_attempts = int(os.getenv("PIA_YT_MAX_CHUNKS", "2000"))
+    except Exception:
+        max_attempts = 2000
+    try:
+        deadline_sec = float(os.getenv("PIA_YT_UPLOAD_TIMEOUT_SEC", "5400"))
+    except Exception:
+        deadline_sec = 5400.0
+    start = time.time()
     response = None
+    attempts = 0
     while response is None:
-        status, response = request.next_chunk()
+        attempts += 1
+        if attempts > max_attempts or (time.time() - start) > deadline_sec:
+            raise RuntimeError(
+                f"YouTube upload stalled (attempts={attempts}, elapsed={time.time() - start:.0f}s). "
+                "Aborting instead of hanging to the job timeout."
+            )
+        status, response = request.next_chunk(num_retries=5)
         if status:
             pct = int(status.progress() * 100)
             print(f"  --> Upload progress: {pct}%")
@@ -135,6 +206,7 @@ def upload_to_youtube(video_path, title, description, tags=None, category_id="10
     print(f"[youtube] Upload Complete! Video ID: {video_id}")
     print(f"[youtube] URL: https://youtu.be/{video_id}")
     return video_id
+
 
 def set_video_thumbnail(video_id, thumbnail_path):
     """Sets custom thumbnail on uploaded YouTube video."""
@@ -153,8 +225,13 @@ def set_video_thumbnail(video_id, thumbnail_path):
         print(f"[youtube] Failed to set thumbnail: {e}")
         return False
 
+
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--validate":
+        ok, reason = validate_youtube_credentials()
+        print(f"[youtube] validate: ok={ok} ({reason})")
+        sys.exit(0 if ok else 2)
     if len(sys.argv) > 3:
         upload_to_youtube(sys.argv[1], sys.argv[2], sys.argv[3])
     else:
-        print("Usage: python publish_youtube.py <video_path> <title> <description>")
+        print("Usage: python publish_youtube.py <video_path> <title> <description> | --validate")

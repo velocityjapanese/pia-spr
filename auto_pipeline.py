@@ -194,6 +194,17 @@ def run_pipeline(minutes=15, force_yt=None, dry_run=False, video_path=None):
           f"Facebook creds={'OK' if fb_ok else 'MISSING'}")
     if upload_yt and not yt_ok:
         print("[PREFLIGHT] WARNING: YouTube upload scheduled but YT_CLIENT_ID/YT_CLIENT_SECRET/YT_REFRESH_TOKEN are missing.")
+    if upload_yt and yt_ok:
+        try:
+            from publish_youtube import validate_youtube_credentials
+            yt_valid, yt_reason = validate_youtube_credentials()
+            print(f"[PREFLIGHT] YouTube token check: {yt_reason}")
+            if not yt_valid:
+                print("\n[PREFLIGHT] SKIP: YouTube credentials are present but INVALID. "
+                      "Exiting BEFORE render (refresh the OAuth token and update secrets).")
+                return False
+        except ImportError as e:
+            print(f"[PREFLIGHT] NOTE: could not validate YouTube token ({e}); continuing.")
     if not fb_ok:
         print("[PREFLIGHT] NOTE: Facebook creds missing (FB_PAGE_ID/FB_PAGE_ACCESS_TOKEN). Facebook will be skipped.")
 
