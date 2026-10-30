@@ -123,6 +123,15 @@ def composite_longform_video(viz_video, score_input, audio_wav, output_mp4, song
 
     is_synced_sequence = score_input.endswith('.txt')
 
+    # lfi-bngo style loop: when only a short viz block was rendered
+    # (PIA_VIZ_SECONDS), loop it infinitely; -shortest below still caps
+    # output at the full-length score/audio. Score cards stay full-length
+    # and in sync; only the ambient background loops.
+    loop_viz = os.getenv('PIA_VIZ_LOOP', '').lower() in ('1', 'true', 'yes')
+    viz_input = ['-stream_loop', '-1', '-i', rel_viz] if loop_viz else ['-i', rel_viz]
+    if loop_viz:
+        print("[composite] viz loop mode: looping short background block to full length")
+
     if is_synced_sequence:
         filter_complex = (
             "[0:v][1:v]overlay=0:0[v1]; "
@@ -130,7 +139,7 @@ def composite_longform_video(viz_video, score_input, audio_wav, output_mp4, song
         )
         cmd = [
             'ffmpeg', '-y',
-            '-i', rel_viz,
+            *viz_input,
             '-i', rel_header,
             '-f', 'concat', '-safe', '0', '-i', rel_score,
             '-i', rel_audio,
@@ -155,7 +164,7 @@ def composite_longform_video(viz_video, score_input, audio_wav, output_mp4, song
         )
         cmd = [
             'ffmpeg', '-y',
-            '-i', rel_viz,
+            *viz_input,
             '-i', rel_header,
             '-i', rel_score,
             '-i', rel_audio,

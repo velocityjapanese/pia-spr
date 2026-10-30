@@ -33,6 +33,37 @@ def _env_int(name, default):
         return default
 
 
+def _trim_midi_copy(src_path, dst_path, seconds):
+    """Copy first N seconds of a MIDI file (for looped background-viz renders).
+
+    Same idea as lfi-bngo's loop-block assembly: render one short segment once,
+    then stream_loop it to full length in the composite. Notes stuck at the cut
+    get an all-notes-off per channel so the short clip ends cleanly.
+    """
+    import mido
+    mid = mido.MidiFile(src_path)
+    total_sec = float(mid.length) if getattr(mid, 'length', 0) else 0.0
+    if total_sec <= 0 or seconds <= 0 or seconds >= total_sec:
+        shutil.copy2(src_path, dst_path)
+        return dst_path
+    total_ticks = max(sum(m.time for m in t) for t in mid.tracks)
+    cutoff = int(total_ticks * (seconds / total_sec))
+    out = mido.MidiFile(type=mid.type, ticks_per_beat=mid.ticks_per_beat)
+    for track in mid.tracks:
+        nt = mido.MidiTrack()
+        at = 0
+        for msg in track:
+            at += msg.time
+            if at > cutoff:
+                break
+            nt.append(msg.copy())
+        for ch in range(16):
+            nt.append(mido.Message('control_change', channel=ch, control=123, value=0, time=0))
+        out.tracks.append(nt)
+    out.save(dst_path)
+    return dst_path
+
+
 def generate_longform_video(mood='emotional', title=None, bars=16, tempo=None, minutes=None, output_filename=None):
     """
     Executes the 16:9 Landscape Long-Form YouTube Piano Video Pipeline:
@@ -107,10 +138,17 @@ def generate_longform_video(mood='emotional', title=None, bars=16, tempo=None, m
     score_input = generate_synced_score_sequence(midi_path, score_cards_dir, bars_per_slide=bars_per_slide)
     print(f"    [stage done in {time.time() - t_score:.1f}s]")
 
-    # Step 4: 16:9 Visualizer
+    # Step 4: 16:9 Visualizer (loop-block fast path, lfi-bngo style)
     print("\n>>> Step 4/5: Rendering 16:9 Fullscreen Visualizer (1920x1080, 88 Keys)...")
+    viz_seconds = _env_int('PIA_VIZ_SECONDS', 0)
+    viz_src = midi_path
+    if viz_seconds > 0:
+        viz_src = os.path.join(OUTPUT_DIR, f"{base_name}_vizsrc.mid")
+        _trim_midi_copy(midi_path, viz_src, viz_seconds)
+        os.environ['PIA_VIZ_LOOP'] = '1'
+        print(f"    [viz loop mode] rendering {viz_seconds}s background block, looped to full length in composite")
     t_viz = time.time()
-    render_longform_visualizer(midi_path, viz_path, framerate=30, width=1920, height=1080)
+    render_longform_visualizer(viz_src, viz_path, framerate=30, width=1920, height=1080)
     print(f"    [stage done in {time.time() - t_viz:.1f}s]")
 
     # Step 5: Video Compositing

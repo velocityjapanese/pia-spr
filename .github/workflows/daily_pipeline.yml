@@ -42,6 +42,9 @@ jobs:
       FACEBOOK_PAGE_ID: ${{ secrets.FACEBOOK_PAGE_ID }}
       FACEBOOK_PAGE_ACCESS_TOKEN: ${{ secrets.FACEBOOK_PAGE_ACCESS_TOKEN }}
       # CI speed tuning: keeps a 15-min 1080p render inside the 3h job budget
+      # lfi-bngo style loop-block assembly: render a 120s viz background once,
+      # stream_loop it under the full-length score + audio in the composite
+      PIA_VIZ_SECONDS: '120'
       PIA_BARS_PER_SLIDE: '4'
       PIA_VIZ_QUALITY: 'HIGH'
       PIA_VIZ_PARTICLES: '96'
@@ -113,7 +116,20 @@ jobs:
           $mins = "${{ github.event.inputs.duration_minutes }}"
           if (-not $mins) { $mins = "15" }
           Write-Host "Starting PianoSpheric $mins-Minute Publishing Pipeline..."
-          python auto_pipeline.py --minutes $mins
+          $attempt = 0
+          $max_attempts = 2
+          while ($attempt -lt $max_attempts) {
+            $attempt += 1
+            Write-Host ">>> Execution attempt $attempt of $max_attempts..."
+            python auto_pipeline.py --minutes $mins
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "Pipeline completed successfully."
+              break
+            }
+            Write-Host "Attempt $attempt failed (exit $LASTEXITCODE)."
+            if ($attempt -ge $max_attempts) { exit 1 }
+            Start-Sleep -Seconds 15
+          }
 
       - name: Commit published videos log
         if: always()
@@ -126,5 +142,6 @@ jobs:
             Write-Host "No changes to published_videos.json to commit."
           } else {
             git commit -m "chore: update published videos log [skip ci]"
+            git pull --rebase origin main
             git push origin main
           }
