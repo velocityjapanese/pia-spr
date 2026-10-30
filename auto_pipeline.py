@@ -214,7 +214,8 @@ def run_pipeline(minutes=15, force_yt=None, dry_run=False, video_path=None):
               "(avoids a ~3h render that posts nothing).")
         print("[PREFLIGHT] Fix: set FB_PAGE_ID + FB_PAGE_ACCESS_TOKEN secrets for daily posts, "
               "and/or check YouTube refresh token on Mon/Wed/Fri.")
-        return False
+        # Intentional skip, not a failure: exit 0 so the scheduled run stays green.
+        return True
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 

@@ -121,7 +121,7 @@ jobs:
           while ($attempt -lt $max_attempts) {
             $attempt += 1
             Write-Host ">>> Execution attempt $attempt of $max_attempts..."
-            python auto_pipeline.py --minutes $mins
+            python -u auto_pipeline.py --minutes $mins
             if ($LASTEXITCODE -eq 0) {
               Write-Host "Pipeline completed successfully."
               break
