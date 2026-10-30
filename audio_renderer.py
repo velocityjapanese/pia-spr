@@ -10,6 +10,10 @@ def render_midi_to_audio(midi_path, output_wav=None, sf2_path=None, sample_rate=
         output_wav = os.path.splitext(midi_path)[0] + '.wav'
     if not sf2_path:
         sf2_path = DEFAULT_SF2
+    try:
+        timeout_sec = int(os.getenv('PIA_FLUIDSYNTH_TIMEOUT_SEC', '900'))
+    except Exception:
+        timeout_sec = 900
 
     cmd = [
         FLUIDSYNTH_EXE,
@@ -21,10 +25,13 @@ def render_midi_to_audio(midi_path, output_wav=None, sf2_path=None, sample_rate=
         midi_path
     ]
 
-    print(f"Rendering studio audio with FluidSynth: {midi_path} -> {output_wav}")
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    print(f"Rendering studio audio with FluidSynth: {midi_path} -> {output_wav} (timeout={timeout_sec}s)")
+    try:
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout_sec)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"FluidSynth timed out after {timeout_sec}s")
     if not os.path.exists(output_wav) or os.path.getsize(output_wav) == 0:
-        raise RuntimeError(f"FluidSynth failed: {result.stderr}")
+        raise RuntimeError(f"FluidSynth failed: {(result.stderr or '')[-2000:]}")
 
     print(f"Audio synthesized successfully ({os.path.getsize(output_wav)} bytes)")
     return output_wav

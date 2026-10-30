@@ -37,7 +37,7 @@ def create_longform_header(width=1920, height=120, channel_name="PianoSpheric", 
     pill_y = 30
 
     draw.rounded_rectangle((pill_x, pill_y, pill_x + pill_w, pill_y + pill_h), radius=27, fill=(10, 12, 18, 240), outline=(255, 195, 50, 190), width=2)
-    
+
     # Circular logo
     if os.path.exists(logo_path):
         logo = Image.open(logo_path).convert('RGBA').resize((logo_size, logo_size), Image.Resampling.LANCZOS)
@@ -63,7 +63,7 @@ def create_longform_header(width=1920, height=120, channel_name="PianoSpheric", 
     draw.line((vx + 7, vy + 11, vx + 12, vy + 5), fill=(255, 255, 255, 255), width=2)
 
     # 2. Right Song Title Pill (Guaranteed Non-Overflowing)
-    clean_title = song_title.replace("•", "-")
+    clean_title = song_title.replace("\u2022", "-")
     t_bbox = draw.textbbox((0, 0), clean_title, font=f_title)
     t_tw = t_bbox[2] - t_bbox[0]
     t_th = t_bbox[3] - t_bbox[1]
@@ -80,7 +80,7 @@ def create_longform_header(width=1920, height=120, channel_name="PianoSpheric", 
     t_y = 30
 
     draw.rounded_rectangle((t_x1, t_y, t_x2, t_y + t_pill_h), radius=27, fill=(10, 12, 18, 240), outline=(255, 195, 50, 180), width=2)
-    
+
     # Glowing gold indicator dot
     dot_x = t_x1 + t_pad_l
     dot_y = t_y + (t_pill_h - dot_d) // 2
@@ -94,13 +94,12 @@ def create_longform_header(width=1920, height=120, channel_name="PianoSpheric", 
 
     return img
 
-def composite_longform_video(viz_video, score_input, audio_wav, output_mp4, song_title="Original Composition • G Minor", channel_name="PianoSpheric"):
+def composite_longform_video(viz_video, score_input, audio_wav, output_mp4, song_title="Original Composition \u2022 G Minor", channel_name="PianoSpheric"):
     """
-    Composites 16:9 Landscape YouTube Video:
-    - 1920x1080 Fullscreen falling notes & 88-key piano
-    - Elegant top banner with channel pill and song title
-    - Fully Synced sheet music score cards (flips every 2 bars with playback)
-    - 320kbps Lossless Yamaha Concert Grand audio
+    Composites 16:9 Landscape YouTube Video.
+    Uses veryfast preset + tunable CRF so a 15-min 1080p render fits in CI time.
+    Env: PIA_X264_PRESET (default veryfast), PIA_X264_CRF (default 20),
+    PIA_COMPOSITE_TIMEOUT_SEC (default 3600).
     """
     header_path = os.path.join(PROJECT_DIR, 'output', 'temp_lf_header.png')
     hdr = create_longform_header(width=1920, height=120, channel_name=channel_name, song_title=song_title)
@@ -111,6 +110,16 @@ def composite_longform_video(viz_video, score_input, audio_wav, output_mp4, song
     rel_header = os.path.relpath(header_path, PROJECT_DIR).replace('\\', '/')
     rel_audio = os.path.relpath(audio_wav, PROJECT_DIR).replace('\\', '/')
     rel_out = os.path.relpath(output_mp4, PROJECT_DIR).replace('\\', '/')
+
+    preset = (os.getenv('PIA_X264_PRESET', 'veryfast') or 'veryfast').strip()
+    try:
+        crf = str(int(os.getenv('PIA_X264_CRF', '20')))
+    except Exception:
+        crf = '20'
+    try:
+        timeout_sec = int(os.getenv('PIA_COMPOSITE_TIMEOUT_SEC', '3600'))
+    except Exception:
+        timeout_sec = 3600
 
     is_synced_sequence = score_input.endswith('.txt')
 
@@ -129,8 +138,9 @@ def composite_longform_video(viz_video, score_input, audio_wav, output_mp4, song
             '-map', '[vfinal]',
             '-map', '3:a',
             '-c:v', 'libx264',
-            '-preset', 'fast',
-            '-crf', '17',
+            '-preset', preset,
+            '-crf', crf,
+            '-threads', '0',
             '-pix_fmt', 'yuv420p',
             '-c:a', 'aac',
             '-b:a', '320k',
@@ -153,8 +163,9 @@ def composite_longform_video(viz_video, score_input, audio_wav, output_mp4, song
             '-map', '[vfinal]',
             '-map', '3:a',
             '-c:v', 'libx264',
-            '-preset', 'fast',
-            '-crf', '17',
+            '-preset', preset,
+            '-crf', crf,
+            '-threads', '0',
             '-pix_fmt', 'yuv420p',
             '-c:a', 'aac',
             '-b:a', '320k',
@@ -162,10 +173,13 @@ def composite_longform_video(viz_video, score_input, audio_wav, output_mp4, song
             rel_out
         ]
 
-    print(f"Compositing 16:9 Long-Form Video: {output_mp4}")
-    result = subprocess.run(cmd, cwd=PROJECT_DIR, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    print(f"Compositing 16:9 Long-Form Video: {output_mp4} (preset={preset} crf={crf} timeout={timeout_sec}s)")
+    try:
+        result = subprocess.run(cmd, cwd=PROJECT_DIR, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout_sec)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"FFmpeg compositing timed out after {timeout_sec}s")
     if not os.path.exists(output_mp4) or os.path.getsize(output_mp4) == 0:
-        raise RuntimeError(f"FFmpeg compositing failed: {result.stderr}")
+        raise RuntimeError(f"FFmpeg compositing failed: {(result.stderr or '')[-3000:]}")
 
     print(f"16:9 Video successfully generated ({os.path.getsize(output_mp4)} bytes): {output_mp4}")
     return output_mp4

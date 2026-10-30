@@ -41,6 +41,14 @@ jobs:
       FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
       FACEBOOK_PAGE_ID: ${{ secrets.FACEBOOK_PAGE_ID }}
       FACEBOOK_PAGE_ACCESS_TOKEN: ${{ secrets.FACEBOOK_PAGE_ACCESS_TOKEN }}
+      # CI speed tuning: keeps a 15-min 1080p render inside the 3h job budget
+      PIA_BARS_PER_SLIDE: '4'
+      PIA_VIZ_QUALITY: 'HIGH'
+      PIA_VIZ_PARTICLES: '96'
+      PIA_VIZ_TIMEOUT_SEC: '4200'
+      PIA_COMPOSITE_TIMEOUT_SEC: '3600'
+      PIA_X264_PRESET: 'veryfast'
+      PIA_X264_CRF: '20'
 
     steps:
       - name: Checkout repository
@@ -59,12 +67,22 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          ffmpeg -version
 
       - name: Ensure SoundFont available
         run: |
           if (-not (Test-Path "soundfonts\Yamaha_Grand.sf2") -and (Test-Path "soundfonts\TimGM6mb.sf2")) {
             Copy-Item "soundfonts\TimGM6mb.sf2" "soundfonts\Yamaha_Grand.sf2"
           }
+
+      - name: Preflight publish credentials (no values printed)
+        run: |
+          $yt = ($env:YT_REFRESH_TOKEN -ne "" -and $env:YT_CLIENT_ID -ne "" -and $env:YT_CLIENT_SECRET -ne "") -or ($env:YOUTUBE_REFRESH_TOKEN -ne "" -and $env:YOUTUBE_CLIENT_ID -ne "" -and $env:YOUTUBE_CLIENT_SECRET -ne "")
+          $fb = ($env:FB_PAGE_ID -ne "" -and $env:FB_PAGE_ACCESS_TOKEN -ne "") -or ($env:FACEBOOK_PAGE_ID -ne "" -and $env:FACEBOOK_PAGE_ACCESS_TOKEN -ne "")
+          Write-Host "YouTube creds present: $yt"
+          Write-Host "Facebook creds present: $fb"
+          if (-not $yt -and -not $fb) { Write-Host "::warning::No YouTube AND no Facebook credentials. Pipeline will exit before rendering." }
+          elseif (-not $fb) { Write-Host "::warning::Facebook creds missing: Tue/Thu/Sat/Sun runs will exit before rendering until FB_PAGE_ID + FB_PAGE_ACCESS_TOKEN are set." }
 
       - name: Check YouTube Upload Schedule (Mon / Wed / Fri)
         id: schedule_check
@@ -88,6 +106,7 @@ jobs:
           }
 
       - name: Run Automation Pipeline (15-Minute 1080p Video)
+        timeout-minutes: 150
         env:
           UPLOAD_YOUTUBE: ${{ steps.schedule_check.outputs.should_upload }}
         run: |
@@ -101,7 +120,7 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add published_videos.json
+          git add -f published_videos.json
           $diff = git diff --staged --quiet
           if ($LASTEXITCODE -eq 0) {
             Write-Host "No changes to published_videos.json to commit."

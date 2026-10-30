@@ -25,6 +25,14 @@ OUTPUT_DIR = os.path.join(PROJECT_DIR, 'output')
 FINAL_EXPORT_DIR = os.path.join(os.path.dirname(PROJECT_DIR), 'FINAL_EXPORTED_VIDEOS')
 HISTORY_FILE = os.path.join(PROJECT_DIR, 'longform_history.json')
 
+
+def _env_int(name, default):
+    try:
+        return int(os.getenv(name, str(default)))
+    except Exception:
+        return default
+
+
 def generate_longform_video(mood='emotional', title=None, bars=16, tempo=None, minutes=None, output_filename=None):
     """
     Executes the 16:9 Landscape Long-Form YouTube Piano Video Pipeline:
@@ -33,6 +41,10 @@ def generate_longform_video(mood='emotional', title=None, bars=16, tempo=None, m
     3. Engrave 16:9 floating sheet music card
     4. Render 1920x1080 88-key golden falling notes visualizer
     5. Composite into 16:9 Full HD MP4 + export YouTube Chapters
+
+    CI tuning: PIA_BARS_PER_SLIDE (default 4, was 2) halves the
+    verovio/music21 score-card count so a 15-min suite (~257 bars)
+    renders ~65 cards instead of ~129.
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -60,32 +72,52 @@ def generate_longform_video(mood='emotional', title=None, bars=16, tempo=None, m
     start_time = time.time()
     chapters_info = None
 
+    def stage(name, fn):
+        t0 = time.time()
+        print(f">>> {name}...")
+        out = fn()
+        print(f"    [stage done in {time.time() - t0:.1f}s]")
+        return out
+
     # Step 1: Music Composition
-    print(">>> Step 1/5: Composing Long-Form Piano Music...")
-    if minutes:
-        comp_info = compose_longform_suite(midi_path, target_minutes=minutes, mood=mood)
-        song_title = title if title else comp_info['title']
-        chapters_info = comp_info.get('chapters', [])
-    else:
-        comp_info = compose_longform_piece(midi_path, mood=mood, tempo_bpm=tempo, num_bars=bars)
-        song_title = title if title else comp_info['title']
+    def _compose():
+        nonlocal song_title, chapters_info
+        if minutes:
+            comp_info = compose_longform_suite(midi_path, target_minutes=minutes, mood=mood)
+            song_title = title if title else comp_info['title']
+            chapters_info = comp_info.get('chapters', [])
+        else:
+            comp_info = compose_longform_piece(midi_path, mood=mood, tempo_bpm=tempo, num_bars=bars)
+            song_title = title if title else comp_info['title']
+    song_title = title or "PianoSpheric Suite"
+    stage("Step 1/5: Composing Long-Form Piano Music", _compose)
 
     # Step 2: Audio Synthesis
     print("\n>>> Step 2/5: Synthesizing Studio Grand Piano Audio (FluidSynth)...")
+    t_audio = time.time()
     render_midi_to_audio(midi_path, audio_path)
+    print(f"    [stage done in {time.time() - t_audio:.1f}s]")
 
     # Step 3: Synchronized Sheet Music Engraving
     print("\n>>> Step 3/5: Engraving Fully Synced Sheet Music Sequence...")
+    bars_per_slide = _env_int('PIA_BARS_PER_SLIDE', 4)
+    print(f"    bars_per_slide={bars_per_slide}")
+    t_score = time.time()
     score_cards_dir = os.path.join(OUTPUT_DIR, f"{base_name}_score_cards")
-    score_input = generate_synced_score_sequence(midi_path, score_cards_dir, bars_per_slide=2)
+    score_input = generate_synced_score_sequence(midi_path, score_cards_dir, bars_per_slide=bars_per_slide)
+    print(f"    [stage done in {time.time() - t_score:.1f}s]")
 
     # Step 4: 16:9 Visualizer
     print("\n>>> Step 4/5: Rendering 16:9 Fullscreen Visualizer (1920x1080, 88 Keys)...")
+    t_viz = time.time()
     render_longform_visualizer(midi_path, viz_path, framerate=30, width=1920, height=1080)
+    print(f"    [stage done in {time.time() - t_viz:.1f}s]")
 
     # Step 5: Video Compositing
     print("\n>>> Step 5/5: Compositing 16:9 Full HD Video (FFmpeg)...")
+    t_comp = time.time()
     composite_longform_video(viz_path, score_input, audio_wav=audio_path, output_mp4=final_mp4, song_title=song_title, channel_name="PianoSpheric")
+    print(f"    [stage done in {time.time() - t_comp:.1f}s]")
 
     # Export to FINAL_EXPORTED_VIDEOS
     export_copy = os.path.join(FINAL_EXPORT_DIR, os.path.basename(final_mp4))

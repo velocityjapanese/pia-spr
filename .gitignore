@@ -22,7 +22,6 @@ __pycache__/
 *.py[cod]
 .venv
 venv/
-published_videos.json
 longform_history.json
 
 # OS specific

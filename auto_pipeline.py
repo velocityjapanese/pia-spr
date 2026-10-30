@@ -39,7 +39,20 @@ GEN_API = "https://gen.pollinations.ai"
 from bot import generate_longform_video
 from thumbnail_generator import create_pianospheric_thumbnail
 from publish_youtube import upload_to_youtube, set_video_thumbnail
-from publish_facebook import upload_to_facebook
+from publish_facebook import upload_to_facebook, get_facebook_credentials
+
+
+def has_youtube_creds():
+    cid = (os.getenv("YOUTUBE_CLIENT_ID") or os.getenv("YT_CLIENT_ID", "")).strip()
+    sec = (os.getenv("YOUTUBE_CLIENT_SECRET") or os.getenv("YT_CLIENT_SECRET", "")).strip()
+    tok = (os.getenv("YOUTUBE_REFRESH_TOKEN") or os.getenv("YT_REFRESH_TOKEN", "")).strip()
+    return bool(cid and sec and tok)
+
+
+def has_facebook_creds():
+    page_id, token = get_facebook_credentials()
+    return bool(page_id and token)
+
 
 def get_published_history():
     if os.path.exists(PUBLISHED_LOG):
@@ -83,11 +96,11 @@ def generate_seo_metadata(song_title, chapters, duration_mins=15):
         "STRICT GUIDELINES:\n"
         f"- The song is titled: '{song_title}'. Duration: {duration_mins} Minutes.\n"
         "- Generate a high-CTR YouTube title (max 95 chars) formatted for long-form relaxation videos, e.g. "
-        f"'{duration_mins} Min Relaxing Piano | {song_title} · 432Hz Deep Sleep & Study (1080p HD)'\n"
+        f"'{duration_mins} Min Relaxing Piano | {song_title} \u00b7 432Hz Deep Sleep & Study (1080p HD)'\n"
         "- Generate an engaging, atmospheric description (4-6 sentences) inviting listeners to relax, meditate, "
         f"work, or sleep, asking viewers what they are focusing on today, and encouraging subscriptions to {CHANNEL_NAME}.\n"
         f"- The description MUST include this exact chapter timestamp list:\n{chapters_formatted}\n\n"
-        "- Include relevant hashtags: #piano #relaxingpiano #studymusic #sleepmusic #432hz #pianospheric #ambientpiano #deepfocus #meditation\n\n"
+        "- Include relevant hashtags: #piano #relaxingpiano #studymusic #sleepmusic #432hz #pianospheric #deepfocus #meditation\n\n"
         "Return ONLY a valid JSON object without markdown fences, with this exact schema:\n"
         "{\n"
         '  "title": "<title under 95 chars>",\n'
@@ -120,13 +133,13 @@ def generate_seo_metadata(song_title, chapters, duration_mins=15):
 
     # Fallback template
     print("[AI] Using high-converting built-in SEO metadata template.")
-    title = f"{duration_mins} Min Relaxing Piano Suite | {song_title} · 432Hz Sleep & Study (1080p HD)"
+    title = f"{duration_mins} Min Relaxing Piano Suite | {song_title} \u00b7 432Hz Sleep & Study (1080p HD)"
     desc = (
         f"Immerse yourself in 15 minutes of serene, celestial piano music composed to help you relax, "
         f"study, relieve stress, and drift into deep sleep.\n\n"
-        f"✨ Featured Piece: {song_title}\n\n"
+        f"\u2728 Featured Piece: {song_title}\n\n"
         f"Timestamps:\n{chapters_formatted}\n\n"
-        f"🎹 Welcome to {CHANNEL_NAME}. Subscribe for new relaxing piano suites released every Monday, Wednesday, and Friday.\n\n"
+        f"\U0001f3b9 Welcome to {CHANNEL_NAME}. Subscribe for new relaxing piano suites released every Monday, Wednesday, and Friday.\n\n"
         f"#piano #relaxingpiano #studymusic #sleepmusic #pianospheric #432hz #deepfocus #ambientpiano"
     )
     tags = [
@@ -164,19 +177,37 @@ def should_publish_to_youtube(force_yt=None):
 def run_pipeline(minutes=15, force_yt=None, dry_run=False, video_path=None):
     """
     Master execution pipeline.
+    Preflight: if neither YouTube nor Facebook can publish, exit BEFORE
+    the multi-hour render so the daily job finishes in seconds, not 3h.
     """
     print("\n" + "="*70)
     print(f"[{CHANNEL_NAME.upper()} AUTOMATION] STARTING DAILY LONG-FORM PIPELINE")
     print(f"Target Duration: {minutes} Minutes | Channel: {CHANNEL_NAME}")
     print("="*70 + "\n")
 
-    # Step 1: Check YouTube Schedule
+    # Step 0: Preflight credentials BEFORE expensive render
     upload_yt, schedule_reason = should_publish_to_youtube(force_yt)
     print(f"[SCHEDULE] {schedule_reason}")
+    yt_ok = has_youtube_creds() if upload_yt else False
+    fb_ok = has_facebook_creds()
+    print(f"[PREFLIGHT] YouTube scheduled={upload_yt} creds={'OK' if yt_ok else 'MISSING'} | "
+          f"Facebook creds={'OK' if fb_ok else 'MISSING'}")
+    if upload_yt and not yt_ok:
+        print("[PREFLIGHT] WARNING: YouTube upload scheduled but YT_CLIENT_ID/YT_CLIENT_SECRET/YT_REFRESH_TOKEN are missing.")
+    if not fb_ok:
+        print("[PREFLIGHT] NOTE: Facebook creds missing (FB_PAGE_ID/FB_PAGE_ACCESS_TOKEN). Facebook will be skipped.")
+
+    will_publish = (upload_yt and yt_ok) or fb_ok
+    if not dry_run and not will_publish:
+        print("\n[PREFLIGHT] SKIP: no reachable publish destination. Exiting BEFORE render "
+              "(avoids a ~3h render that posts nothing).")
+        print("[PREFLIGHT] Fix: set FB_PAGE_ID + FB_PAGE_ACCESS_TOKEN secrets for daily posts, "
+              "and/or check YouTube refresh token on Mon/Wed/Fri.")
+        return False
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # Step 2: Render or Use Existing Video
+    # Step 1: Render or Use Existing Video
     if video_path and os.path.exists(video_path):
         print(f"\n>>> [1/5] Using Existing Video File: {video_path}")
         video_path = os.path.abspath(video_path)
@@ -209,36 +240,39 @@ def run_pipeline(minutes=15, force_yt=None, dry_run=False, video_path=None):
             {"time": "00:30", "title": "Movement II: Cosmic Reverie"}
         ]
 
-    # Step 3: Generate Thumbnail
+    # Step 2: Generate Thumbnail
     print(f"\n>>> [2/5] Creating 1280x720 Thumbnail...")
     thumb_path = os.path.join(OUTPUT_DIR, f"thumb_{timestamp}.jpg")
     create_pianospheric_thumbnail(video_path, thumb_path)
 
-    # Step 4: Generate SEO Metadata
+    # Step 3: Generate SEO Metadata
     print(f"\n>>> [3/5] Generating SEO Metadata...")
     song_title = f"{minutes} Minutes of Relaxing Piano Suite" if minutes > 1 else "Peaceful Cosmic Piano Suite"
     title, desc, tags = generate_seo_metadata(song_title, chapters, duration_mins=max(1, minutes))
-    print(f"  • Title: {title}")
+    print(f"  \u2022 Title: {title}")
 
     if dry_run:
         print("\n[DRY RUN] Finished without uploading. Video saved at:", video_path)
         save_published_entry(video_path, yt_id=None, fb_id=None, title=title, chapters=chapters)
         return True
 
-    # Step 5: Upload to Platforms
+    # Step 4: Upload to Platforms
     # YouTube Upload (Mon, Wed, Fri)
     yt_video_id = None
     if upload_yt:
-        print(f"\n>>> [4/5] Uploading to YouTube ({CHANNEL_NAME})...")
-        try:
-            yt_video_id = upload_to_youtube(video_path, title, desc, tags=tags)
-            if yt_video_id:
-                set_video_thumbnail(yt_video_id, thumb_path)
-                print(f"🎉 SUCCESS! Published to YouTube: https://youtu.be/{yt_video_id}")
-        except Exception as e:
-            print(f"[YOUTUBE NOTE] YouTube upload error: {e}")
+        if not yt_ok:
+            print("\n>>> [4/5] Skipping YouTube upload (credentials missing).")
+        else:
+            print(f"\n>>> [4/5] Uploading to YouTube ({CHANNEL_NAME})...")
+            try:
+                yt_video_id = upload_to_youtube(video_path, title, desc, tags=tags)
+                if yt_video_id:
+                    set_video_thumbnail(yt_video_id, thumb_path)
+                    print(f"\U0001f389 SUCCESS! Published to YouTube: https://youtu.be/{yt_video_id}")
+            except Exception as e:
+                print(f"[YOUTUBE NOTE] YouTube upload error: {e}")
     else:
-        print(f"\n>>> [4/5] ⏸️ Skipping YouTube upload per schedule.")
+        print(f"\n>>> [4/5] \u23f8\ufe0f Skipping YouTube upload per schedule.")
 
     # Facebook Upload (Daily)
     fb_video_id = None
@@ -247,7 +281,7 @@ def run_pipeline(minutes=15, force_yt=None, dry_run=False, video_path=None):
         fb_res = upload_to_facebook(video_path, title, desc)
         if fb_res:
             fb_video_id = fb_res.get("id")
-            print(f"🎉 SUCCESS! Published to Facebook: {fb_video_id}")
+            print(f"\U0001f389 SUCCESS! Published to Facebook: {fb_video_id}")
     except Exception as e_fb:
         print(f"[FACEBOOK NOTE] Facebook upload error: {e_fb}")
 
@@ -263,9 +297,11 @@ def run_pipeline(minutes=15, force_yt=None, dry_run=False, video_path=None):
         print(f"YouTube URL: https://youtu.be/{yt_video_id}")
     if fb_video_id:
         print(f"Facebook Video ID: {fb_video_id}")
+    if not yt_video_id and not fb_video_id:
+        print("WARNING: nothing was published (check schedule + credentials above).")
     print("="*70 + "\n")
 
-    return True
+    return bool(yt_video_id or fb_video_id)
 
 if __name__ == '__main__':
     mins = 15
@@ -284,4 +320,5 @@ if __name__ == '__main__':
         elif arg == "--video" and idx + 1 < len(sys.argv):
             vid_input = sys.argv[idx + 1]
 
-    run_pipeline(minutes=mins, force_yt=force, dry_run=dry, video_path=vid_input)
+    ok = run_pipeline(minutes=mins, force_yt=force, dry_run=dry, video_path=vid_input)
+    sys.exit(0 if ok else 2)
