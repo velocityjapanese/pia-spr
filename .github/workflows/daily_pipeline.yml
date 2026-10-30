@@ -45,6 +45,10 @@ jobs:
       # lfi-bngo style loop-block assembly: render a 120s viz background once,
       # stream_loop it under the full-length score + audio in the composite
       PIA_VIZ_SECONDS: '120'
+      # MIDIVisualizer.exe cannot render on a GPU-less runner (70 min for a
+      # 2-min block, zero output, always falls back). Skip the dead wait:
+      # the ffmpeg background below is what every published video uses anyway.
+      PIA_VIZ_FALLBACK: '1'
       PIA_BARS_PER_SLIDE: '4'
       PIA_VIZ_QUALITY: 'HIGH'
       PIA_VIZ_PARTICLES: '96'
