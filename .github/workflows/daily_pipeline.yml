@@ -40,7 +40,7 @@ concurrency:
 jobs:
   publish-piano-video:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 90
 
     env:
       YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
@@ -139,7 +139,7 @@ jobs:
 
       - name: Run automation pipeline
         if: ${{ github.event.inputs.smoke != 'true' }}
-        timeout-minutes: 170
+        timeout-minutes: 75
         env:
           UPLOAD_YOUTUBE: ${{ steps.schedule_check.outputs.should_upload }}
         run: |
