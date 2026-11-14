@@ -1,155 +1,207 @@
+"""PianoSpheric v2 orchestrator: compose -> audio -> cinematic render -> mux."""
+import argparse
+import json
 import os
+import shutil
 import sys
+import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from datetime import datetime
 
-if sys.platform == 'win32':
+if sys.platform == "win32":
     try:
-        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+except Exception:
+    pass
 
-import time
-import json
-import random
-import argparse
-from datetime import datetime
-import shutil
+from audio import render_audio
+from composition import compose
+from config import FINAL_EXPORT_DIR, FPS, OUTPUT_DIR, WORK_DIR
+from render.master import assemble
+from render.section import render_section
 
-from music_generator import compose_longform_piece, compose_longform_suite
-from audio_renderer import render_midi_to_audio
-from score_renderer import create_longform_score_card, generate_synced_score_sequence
-from visualizer_renderer import render_longform_visualizer
-from compositor import composite_longform_video
+HISTORY_FILE = os.path.join(OUTPUT_DIR, "longform_history.json")
 
-PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
-OUTPUT_DIR = os.path.join(PROJECT_DIR, 'output')
-FINAL_EXPORT_DIR = os.path.join(os.path.dirname(PROJECT_DIR), 'FINAL_EXPORTED_VIDEOS')
-HISTORY_FILE = os.path.join(PROJECT_DIR, 'longform_history.json')
 
-def generate_longform_video(mood='emotional', title=None, bars=16, tempo=None, minutes=None, output_filename=None):
-    """
-    Executes the 16:9 Landscape Long-Form YouTube Piano Video Pipeline:
-    1. Compose multi-section piano composition (or 20-min suite)
-    2. Synthesize studio Grand Piano audio (WAV)
-    3. Engrave 16:9 floating sheet music card
-    4. Render 1920x1080 88-key golden falling notes visualizer
-    5. Composite into 16:9 Full HD MP4 + export YouTube Chapters
-    """
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+def generate_longform_video(mood="relaxing", title=None, bars=16, tempo=None,
+                            minutes=None, output_filename=None, seed=None,
+                            resume=False, workers=2, avoid_titles=None):
+    minutes = minutes or 15
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(WORK_DIR, exist_ok=True)
     os.makedirs(FINAL_EXPORT_DIR, exist_ok=True)
+    base_name = f"longform_piano_{stamp}"
 
-    base_name = f"longform_piano_{timestamp}"
-    midi_path = os.path.join(OUTPUT_DIR, f"{base_name}.mid")
+    print("\n" + "=" * 68)
+    print(f"[PIANOSPHERIC] {minutes}-minute cinematic piano render  (seed={seed or 'random'})")
+    print("=" * 68)
+
+    t0 = time.time()
+    history = _read_history()
+    titles = {h.get("title") for h in history if h.get("title")} | set(avoid_titles or ())
+    comp = compose(minutes, seed=seed, output_dir=OUTPUT_DIR, base_name=base_name,
+                   avoid_titles=titles)
+    if seed is not None and any(h.get("seed") == seed for h in history):
+        print(f"[compose] NOTE: seed {seed} was used in a previous render.")
+    song_title = title or comp["title"]
+    timeline = json.load(open(comp["timeline_path"], encoding="utf-8"))
+    sections, notes = timeline["sections"], timeline["notes"]
+
+    print(f"\n>>> 1/4  Composed: {song_title}  ({timeline['key']}, "
+          f"{timeline['duration']/60:.1f} min, {len(notes)} notes)")
+
     audio_path = os.path.join(OUTPUT_DIR, f"{base_name}.wav")
-    score_path = os.path.join(OUTPUT_DIR, f"{base_name}_score.png")
-    viz_path = os.path.join(OUTPUT_DIR, f"{base_name}_viz.mp4")
+    render_audio(comp["midi_path"], audio_path, work_dir=WORK_DIR)
+    print(f">>> 2/4  Audio mastered: {os.path.basename(audio_path)}")
+
+    print(f">>> 3/4  Rendering {len(sections)} sections (2 workers)...")
+    tasks = [(s, notes, WORK_DIR, comp["seed"], resume) for s in sections]
+    section_files = [None] * len(sections)
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(render_section, t): t[0]["index"] for t in tasks}
+        for fut in as_completed(futures):
+            idx = futures[fut]
+            path, skipped = fut.result()
+            section_files[idx] = path
+            state = "reused" if skipped else "rendered"
+            print(f"    section {idx + 1}/{len(sections)} {state}: {os.path.basename(path)}")
 
     if output_filename:
         final_mp4 = os.path.join(OUTPUT_DIR, output_filename)
     else:
         final_mp4 = os.path.join(OUTPUT_DIR, f"{base_name}_16x9.mp4")
+    hero_path = final_mp4.replace(".mp4", "_hero.jpg")
+    hero_section = next((s for s in sections if s["role"] == "climax"),
+                        sections[min(2, len(sections) - 1)])
+    hero_time = hero_section["start"] + 25
 
-    print("\n" + "="*65)
-    print(f"[LONG-FORM 16:9 BOT] STARTING PIPELINE: {base_name}")
-    if minutes:
-        print(f"   Mode: Multi-Movement Suite ({minutes} Minutes) | 1920x1080 (16:9)")
-    else:
-        print(f"   Mode: Single Piece ({bars} Bars) | 1920x1080 (16:9)")
-    print("="*65 + "\n")
+    print(">>> 4/4  Assembling master...")
+    info = assemble(section_files, audio_path, final_mp4, WORK_DIR,
+                    hero_time=hero_time, hero_path=hero_path)
 
-    start_time = time.time()
-    chapters_info = None
-
-    # Step 1: Music Composition
-    print(">>> Step 1/5: Composing Long-Form Piano Music...")
-    if minutes:
-        comp_info = compose_longform_suite(midi_path, target_minutes=minutes, mood=mood)
-        song_title = title if title else comp_info['title']
-        chapters_info = comp_info.get('chapters', [])
-    else:
-        comp_info = compose_longform_piece(midi_path, mood=mood, tempo_bpm=tempo, num_bars=bars)
-        song_title = title if title else comp_info['title']
-
-    # Step 2: Audio Synthesis
-    print("\n>>> Step 2/5: Synthesizing Studio Grand Piano Audio (FluidSynth)...")
-    render_midi_to_audio(midi_path, audio_path)
-
-    # Step 3: Synchronized Sheet Music Engraving
-    print("\n>>> Step 3/5: Engraving Fully Synced Sheet Music Sequence...")
-    score_cards_dir = os.path.join(OUTPUT_DIR, f"{base_name}_score_cards")
-    score_input = generate_synced_score_sequence(midi_path, score_cards_dir, bars_per_slide=2)
-
-    # Step 4: 16:9 Visualizer
-    print("\n>>> Step 4/5: Rendering 16:9 Fullscreen Visualizer (1920x1080, 88 Keys)...")
-    render_longform_visualizer(midi_path, viz_path, framerate=30, width=1920, height=1080)
-
-    # Step 5: Video Compositing
-    print("\n>>> Step 5/5: Compositing 16:9 Full HD Video (FFmpeg)...")
-    composite_longform_video(viz_path, score_input, audio_wav=audio_path, output_mp4=final_mp4, song_title=song_title, channel_name="PianoSpheric")
-
-    # Export to FINAL_EXPORTED_VIDEOS
     export_copy = os.path.join(FINAL_EXPORT_DIR, os.path.basename(final_mp4))
     shutil.copy2(final_mp4, export_copy)
+    shutil.copy2(hero_path, os.path.join(FINAL_EXPORT_DIR, os.path.basename(hero_path)))
 
-    # Export Chapters File if available
-    chapters_file = None
-    if chapters_info:
-        chapters_file = export_copy.replace('.mp4', '_chapters.txt')
-        with open(chapters_file, 'w', encoding='utf-8') as f:
-            f.write(f"=== {song_title} ===\n\n")
-            f.write("YouTube Video Description Timestamps:\n")
-            for ch in chapters_info:
-                f.write(f"{ch['time']} {ch['title']}\n")
-        print(f"Generated YouTube Chapters file: {chapters_file}")
-
-    elapsed = round(time.time() - start_time, 2)
-    print("\n" + "="*65)
-    print(f"[SUCCESS] 16:9 Long-Form Video ready in {elapsed}s")
-    print(f"Local file: {final_mp4}")
-    print(f"Exported to: {export_copy}")
-    if chapters_file:
-        print(f"YouTube Chapters: {chapters_file}")
-    print("="*65 + "\n")
-
-    record = {
-        "timestamp": timestamp,
+    meta = {
         "title": song_title,
-        "bars": bars,
-        "duration_sec": elapsed,
-        "output_file": final_mp4,
-        "export_copy": export_copy
+        "seed": comp["seed"],
+        "key": timeline["key"],
+        "base_bpm": timeline["base_bpm"],
+        "duration": timeline["duration"],
+        "sections": sections,
+        "chapters": comp["chapters"],
+        "attribution": "Piano: Salamander Grand Piano (Alexander Holm), CC-BY 3.0.",
     }
-    history = []
-    if os.path.exists(HISTORY_FILE):
-        try:
-            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
-                history = json.load(f)
-        except Exception:
-            history = []
-    history.append(record)
-    with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
-        json.dump(history, f, indent=2)
+    meta_path = final_mp4.replace(".mp4", "_meta.json")
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=2, ensure_ascii=False)
+    shutil.copy2(meta_path, os.path.join(FINAL_EXPORT_DIR, os.path.basename(meta_path)))
 
+    chapters_path = final_mp4.replace(".mp4", "_chapters.txt")
+    with open(chapters_path, "w", encoding="utf-8") as f:
+        f.write(f"=== {song_title} ===\n\n")
+        for ch in comp["chapters"]:
+            f.write(f"{ch['time']} {ch['title']}\n")
+
+    shutil.copy2(comp["timeline_path"],
+                 os.path.join(FINAL_EXPORT_DIR, os.path.basename(comp["timeline_path"])))
+
+    elapsed = time.time() - t0
+    _append_history({
+        "timestamp": stamp, "seed": comp["seed"], "title": song_title,
+        "key": timeline["key"], "minutes": round(timeline["duration"] / 60, 2),
+        "output_file": final_mp4, "render_seconds": round(elapsed, 1),
+    })
+
+    print("\n" + "=" * 68)
+    print(f"[DONE] {song_title}  ({elapsed/60:.1f} min render)")
+    print(f"  video     : {final_mp4}")
+    print(f"  hero frame: {hero_path}")
+    print(f"  chapters  : {chapters_path}")
+    print("=" * 68 + "\n")
     return final_mp4
 
+
+def run_smoke(seed=42):
+    """Render 3 seconds of the first section and assert motion + frame count."""
+    import subprocess
+    from config import FFMPEG, FFPROBE
+
+    smoke_dir = os.path.join(WORK_DIR, "smoke")
+    os.makedirs(smoke_dir, exist_ok=True)
+    comp = compose(1, seed=seed, output_dir=OUTPUT_DIR, base_name=f"smoke_{seed}")
+    timeline = json.load(open(comp["timeline_path"], encoding="utf-8"))
+    section = dict(timeline["sections"][0])
+    section["index"] = 99
+    section["frames"] = 90
+    section["end"] = section["start"] + 3.0
+    path, _ = render_section((section, timeline["notes"], smoke_dir, comp["seed"], False))
+
+    probe = subprocess.run([FFPROBE, "-v", "error", "-select_streams", "v:0",
+                            "-show_entries", "stream=nb_frames,width,height",
+                            "-of", "csv=p=0", path], capture_output=True, text=True)
+    print("[smoke] ffprobe:", probe.stdout.strip())
+    # Hash only the piano-roll region: the keyboard strip animates on its own,
+    # so a full-frame hash can pass while the notes are frozen.
+    md5 = subprocess.run([FFMPEG, "-v", "error", "-i", path,
+                          "-vf", "crop=iw:ih*600/1080:0:0", "-frames:v", "46",
+                          "-f", "framemd5", "-"], capture_output=True, text=True)
+    hashes = [ln.split(",")[-1].strip() for ln in md5.stdout.splitlines() if not ln.startswith("#")]
+    if len(set(hashes)) < len(hashes) - 1:
+        raise RuntimeError("smoke test: piano roll frames repeat (scroll not working)")
+    print(f"[smoke] {len(hashes)} roll frames sampled, {len(set(hashes))} unique -> scroll OK")
+
+    frame_path = os.path.join(OUTPUT_DIR, "_smoke_frame.jpg")
+    subprocess.run([FFMPEG, "-y", "-v", "error", "-ss", "1.6", "-i", path,
+                    "-frames:v", "1", "-q:v", "2", frame_path],
+                   capture_output=True)
+    print(f"[smoke] frame: {frame_path}")
+    print(f"[smoke] PASS: {path}")
+    return path
+
+
+def _read_history():
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+
+def _append_history(record):
+    history = _read_history()
+    history.append(record)
+    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(history, f, indent=2)
+
+
 def main():
-    parser = argparse.ArgumentParser(description="16:9 Landscape Long-Form Piano Video Generator")
-    parser.add_argument('--title', help="Song title (e.g. 'Nocturne in C Minor')")
-    parser.add_argument('--mood', default='emotional', choices=['emotional', 'cinematic', 'romantic', 'relaxing'])
-    parser.add_argument('--bars', type=int, default=16, help="Number of musical bars (for short pieces, e.g. 16-32)")
-    parser.add_argument('--minutes', type=int, help="Target duration in minutes (e.g. --minutes 20 for full multi-movement suite)")
-    parser.add_argument('--tempo', type=int, help="Tempo in BPM")
-    parser.add_argument('--output', help="Output filename")
-    args = parser.parse_args()
+    ap = argparse.ArgumentParser(description="PianoSpheric cinematic piano generator")
+    ap.add_argument("--minutes", type=int, default=15)
+    ap.add_argument("--seed", type=int)
+    ap.add_argument("--title")
+    ap.add_argument("--output")
+    ap.add_argument("--resume", action="store_true")
+    ap.add_argument("--workers", type=int, default=2)
+    ap.add_argument("--smoke", action="store_true")
+    args = ap.parse_args()
 
-    generate_longform_video(
-        mood=args.mood,
-        title=args.title,
-        bars=args.bars,
-        minutes=args.minutes,
-        tempo=args.tempo,
-        output_filename=args.output
-    )
+    if args.smoke:
+        run_smoke(args.seed or 42)
+        return
 
-if __name__ == '__main__':
+    generate_longform_video(minutes=args.minutes, title=args.title, seed=args.seed,
+                            output_filename=args.output, resume=args.resume,
+                            workers=args.workers)
+
+
+if __name__ == "__main__":
     main()

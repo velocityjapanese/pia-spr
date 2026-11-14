@@ -14,15 +14,15 @@ output/
 *.svg
 temp_*
 
-# SoundFonts > 100MB (GitHub 100MB limit)
+# SoundFonts (large; Salamander is fetched and cached in CI)
 soundfonts/Yamaha_Grand.sf2
+soundfonts/Salamander*
 
 # Python
 __pycache__/
 *.py[cod]
 .venv
 venv/
-published_videos.json
 longform_history.json
 
 # OS specific

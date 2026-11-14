@@ -1,11 +1,11 @@
 """
 PianoSpheric Automated Long-Form Publishing Pipeline
 Full End-to-End Orchestrator:
-1. Composes & renders 15-Minute Full HD (1080p 16:9) multi-movement piano suite
-2. Fully synced sheet music cards & 88-key visualizer with PianoSpheric branding
-3. Generates high-CTR 1280x720 thumbnail with logo and cosmic hook
-4. Generates high-converting SEO metadata & chapter timestamps via Pollinations AI
-5. Uploads to YouTube on Mon / Wed / Fri
+1. Composes & renders a 15-minute 1080p cinematic piano suite (new piece every run)
+2. Falling-note visualisation with lit 88-key keyboard (no sheet-music overlay)
+3. Generates a 1280x720 thumbnail from a real frame of the render
+4. Generates SEO metadata & chapter timestamps via Pollinations AI
+5. Uploads to YouTube daily (one original suite per run)
 6. Uploads to Facebook Page daily
 7. Saves publication history & cleans up temporary video files
 """
@@ -24,6 +24,10 @@ if sys.platform == "win32":
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+except Exception:
+    pass
 
 load_dotenv()
 
@@ -32,7 +36,7 @@ OUTPUT_DIR = os.path.join(PROJECT_DIR, 'output')
 FINAL_EXPORT_DIR = os.path.join(os.path.dirname(PROJECT_DIR), 'FINAL_EXPORTED_VIDEOS')
 PUBLISHED_LOG = os.path.join(PROJECT_DIR, 'published_videos.json')
 
-CHANNEL_NAME = os.getenv("CHANNEL_NAME", "PianoSpheric")
+CHANNEL_NAME = (os.getenv("CHANNEL_NAME") or "PianoSpheric").strip() or "PianoSpheric"
 POLLINATIONS_KEY = (os.getenv("POLLINATIONS_API_KEY") or "").strip()
 GEN_API = "https://gen.pollinations.ai"
 
@@ -50,7 +54,8 @@ def get_published_history():
             return []
     return []
 
-def save_published_entry(video_file, yt_id=None, fb_id=None, title="", chapters=None):
+def save_published_entry(video_file, yt_id=None, fb_id=None, title="", chapters=None,
+                         seed=None, piece_title=None):
     history = get_published_history()
     fb_page_id = os.getenv("FB_PAGE_ID", "")
     entry = {
@@ -60,6 +65,8 @@ def save_published_entry(video_file, yt_id=None, fb_id=None, title="", chapters=
         "facebook_id": fb_id,
         "facebook_url": f"https://www.facebook.com/{fb_page_id}/videos/{fb_id}" if (fb_id and fb_page_id) else None,
         "title": title,
+        "piece_title": piece_title,
+        "seed": seed,
         "chapters": chapters or [],
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
@@ -67,6 +74,20 @@ def save_published_entry(video_file, yt_id=None, fb_id=None, title="", chapters=
     with open(PUBLISHED_LOG, "w", encoding="utf-8") as f:
         json.dump(history, f, indent=2, ensure_ascii=False)
     print(f"[LOG] Saved publication record to {PUBLISHED_LOG}")
+
+
+def load_render_meta(video_file):
+    """Reads the composition metadata written next to the rendered video."""
+    stem = os.path.splitext(os.path.abspath(video_file))[0]
+    for path in (stem + "_meta.json",
+                 os.path.join(FINAL_EXPORT_DIR, os.path.basename(stem) + "_meta.json")):
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                print(f"[META NOTE] Could not read {path}: {e}")
+    return {}
 
 def generate_seo_metadata(song_title, chapters, duration_mins=15):
     """
@@ -79,20 +100,20 @@ def generate_seo_metadata(song_title, chapters, duration_mins=15):
 
     prompt = (
         f"You are the creative director for '{CHANNEL_NAME}', an aesthetic YouTube channel featuring "
-        f"{duration_mins}-MINUTE CALM, ETHEREAL, RELAXING PIANO SUITES & 432Hz COSMIC HARMONIES.\n\n"
+        f"{duration_mins}-MINUTE CALM, CINEMATIC, RELAXING ORIGINAL PIANO SUITES.\n\n"
         "STRICT GUIDELINES:\n"
-        f"- The song is titled: '{song_title}'. Duration: {duration_mins} Minutes.\n"
+        f"- The piece is titled: '{song_title}'. Duration: {duration_mins} Minutes.\n"
         "- Generate a high-CTR YouTube title (max 95 chars) formatted for long-form relaxation videos, e.g. "
-        f"'{duration_mins} Min Relaxing Piano | {song_title} · 432Hz Deep Sleep & Study (1080p HD)'\n"
+        f"'{duration_mins} Min Relaxing Piano | {song_title} · Original Cinematic Piano (1080p HD)'\n"
         "- Generate an engaging, atmospheric description (4-6 sentences) inviting listeners to relax, meditate, "
         f"work, or sleep, asking viewers what they are focusing on today, and encouraging subscriptions to {CHANNEL_NAME}.\n"
         f"- The description MUST include this exact chapter timestamp list:\n{chapters_formatted}\n\n"
-        "- Include relevant hashtags: #piano #relaxingpiano #studymusic #sleepmusic #432hz #pianospheric #ambientpiano #deepfocus #meditation\n\n"
+        "- Include relevant hashtags: #piano #relaxingpiano #studymusic #sleepmusic #pianospheric #ambientpiano #deepfocus #meditation #originalmusic\n\n"
         "Return ONLY a valid JSON object without markdown fences, with this exact schema:\n"
         "{\n"
         '  "title": "<title under 95 chars>",\n'
         '  "description": "<rich description including timestamps>",\n'
-        '  "tags": ["piano", "relaxing piano", "study music", "sleep music", "piano visualizer", "pianospheric", "meditation piano", "calm piano", "peaceful piano", "ambient piano", "deep focus", "15 min piano", "instrumental piano"]\n'
+        '  "tags": ["piano", "relaxing piano", "study music", "sleep music", "piano visualizer", "pianospheric", "meditation piano", "calm piano", "peaceful piano", "ambient piano", "deep focus", "instrumental piano", "original composition"]\n'
         "}"
     )
 
@@ -114,32 +135,35 @@ def generate_seo_metadata(song_title, chapters, duration_mins=15):
                 if raw_txt.endswith("```"):
                     raw_txt = raw_txt[:-3]
                 data = json.loads(raw_txt.strip())
-                return data.get("title"), data.get("description"), data.get("tags")
+                title = (data.get("title") or "").strip()
+                if title and len(title) <= 100 and "piano" in title.lower():
+                    return title, data.get("description"), data.get("tags")
+                print("[AI NOTE] Title rejected (too long or missing 'piano'); using template.")
         except Exception as e:
             print(f"[AI NOTE] Pollinations API request error: {e}")
 
     # Fallback template
     print("[AI] Using high-converting built-in SEO metadata template.")
-    title = f"{duration_mins} Min Relaxing Piano Suite | {song_title} · 432Hz Sleep & Study (1080p HD)"
+    title = f"{duration_mins} Min Relaxing Piano | {song_title} · Original Cinematic Piano (1080p HD)"
     desc = (
-        f"Immerse yourself in 15 minutes of serene, celestial piano music composed to help you relax, "
+        f"Immerse yourself in {duration_mins} minutes of serene, cinematic piano music composed to help you relax, "
         f"study, relieve stress, and drift into deep sleep.\n\n"
         f"✨ Featured Piece: {song_title}\n\n"
         f"Timestamps:\n{chapters_formatted}\n\n"
-        f"🎹 Welcome to {CHANNEL_NAME}. Subscribe for new relaxing piano suites released every Monday, Wednesday, and Friday.\n\n"
-        f"#piano #relaxingpiano #studymusic #sleepmusic #pianospheric #432hz #deepfocus #ambientpiano"
+        f"🎹 Welcome to {CHANNEL_NAME}. Subscribe for a brand-new original piano suite every day.\n\n"
+        f"#piano #relaxingpiano #studymusic #sleepmusic #pianospheric #ambientpiano #deepfocus #originalmusic"
     )
     tags = [
         "piano", "relaxing piano", "study music", "sleep music", "piano visualizer",
         "pianospheric", "meditation piano", "calm piano", "peaceful piano", "ambient piano",
-        "deep focus", "15 min piano", "instrumental piano", "stress relief"
+        "deep focus", "instrumental piano", "original composition", "stress relief"
     ]
     return title, desc, tags
 
 def should_publish_to_youtube(force_yt=None):
     """
-    YouTube Schedule: Monday (0), Wednesday (2), Friday (4) UTC.
-    Facebook Schedule: Daily.
+    YouTube Schedule: every day (one original suite per run).
+    Facebook Schedule: daily.
     """
     if force_yt is True:
         return True, "Manual override: YouTube forced to TRUE"
@@ -152,14 +176,8 @@ def should_publish_to_youtube(force_yt=None):
     if env_choice in ("false", "0", "no"):
         return False, "Env override: UPLOAD_YOUTUBE=false"
 
-    weekday = datetime.now(timezone.utc).weekday()
-    day_name = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"][weekday]
-
-    # Monday (0), Wednesday (2), Friday (4)
-    if weekday in (0, 2, 4):
-        return True, f"Scheduled Day ({day_name}): YouTube upload is ENABLED."
-    else:
-        return False, f"Off-Day ({day_name}): YouTube upload is SKIPPED (Facebook will still upload)."
+    day_name = datetime.now(timezone.utc).strftime("%A")
+    return True, f"Daily schedule ({day_name}): YouTube upload is ENABLED."
 
 def run_pipeline(minutes=15, force_yt=None, dry_run=False, video_path=None):
     """
@@ -183,46 +201,67 @@ def run_pipeline(minutes=15, force_yt=None, dry_run=False, video_path=None):
     else:
         print(f"\n>>> [1/5] Rendering {minutes}-Minute Long-form Piano Suite...")
         out_name = f"PianoSpheric_{minutes}min_{timestamp}.mp4"
+        used_titles = {e.get("piece_title") for e in get_published_history()
+                       if e.get("piece_title")}
         video_path = generate_longform_video(
             mood='relaxing',
             minutes=minutes,
-            output_filename=out_name
+            output_filename=out_name,
+            avoid_titles=used_titles
         )
 
-    # Load chapters if generated
-    chapters_txt = video_path.replace('.mp4', '_chapters.txt')
-    chapters_export = os.path.join(FINAL_EXPORT_DIR, os.path.basename(video_path).replace('.mp4', '_chapters.txt'))
-    if not os.path.exists(chapters_txt) and os.path.exists(chapters_export):
-        chapters_txt = chapters_export
+    # Load composition metadata (title, seed, chapters) from the render
+    meta = load_render_meta(video_path)
+    song_title = meta.get("title") or f"{minutes} Minutes of Relaxing Piano"
+    seed = meta.get("seed")
+    attribution = meta.get("attribution",
+                           "Piano: Salamander Grand Piano (Alexander Holm), CC-BY 3.0.")
+    if seed is not None:
+        print(f"[SEED] {seed}  |  {song_title}")
+    print(f"[CREDIT] {attribution}")
 
+    # Chapters: prefer the composition's exact section map
     chapters = []
-    if os.path.exists(chapters_txt):
-        with open(chapters_txt, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if line and line[0].isdigit() and ':' in line[:5]:
-                    parts = line.split(' ', 1)
-                    chapters.append({"time": parts[0], "title": parts[1] if len(parts) > 1 else ""})
+    if meta.get("chapters"):
+        chapters = [{"time": c["time"], "title": c["title"]} for c in meta["chapters"]]
+    else:
+        chapters_txt = video_path.replace('.mp4', '_chapters.txt')
+        chapters_export = os.path.join(FINAL_EXPORT_DIR, os.path.basename(video_path).replace('.mp4', '_chapters.txt'))
+        if not os.path.exists(chapters_txt) and os.path.exists(chapters_export):
+            chapters_txt = chapters_export
+        if os.path.exists(chapters_txt):
+            with open(chapters_txt, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and line[0].isdigit() and ':' in line[:5]:
+                        parts = line.split(' ', 1)
+                        chapters.append({"time": parts[0], "title": parts[1] if len(parts) > 1 else ""})
     if not chapters:
         chapters = [
-            {"time": "00:00", "title": "Movement I: Celestial Peace"},
-            {"time": "00:30", "title": "Movement II: Cosmic Reverie"}
+            {"time": "00:00", "title": "Movement I: Awakening"},
+            {"time": "00:30", "title": "Movement II: Drift"}
         ]
 
     # Step 3: Generate Thumbnail
     print(f"\n>>> [2/5] Creating 1280x720 Thumbnail...")
     thumb_path = os.path.join(OUTPUT_DIR, f"thumb_{timestamp}.jpg")
-    create_pianospheric_thumbnail(video_path, thumb_path)
+    duration_mins = max(1, round(meta.get("duration", minutes * 60) / 60))
+    create_pianospheric_thumbnail(video_path, thumb_path, minutes=duration_mins,
+                                  episode=len(get_published_history()) + 1)
 
     # Step 4: Generate SEO Metadata
     print(f"\n>>> [3/5] Generating SEO Metadata...")
-    song_title = f"{minutes} Minutes of Relaxing Piano Suite" if minutes > 1 else "Peaceful Cosmic Piano Suite"
-    title, desc, tags = generate_seo_metadata(song_title, chapters, duration_mins=max(1, minutes))
+    title, desc, tags = generate_seo_metadata(song_title, chapters, duration_mins=duration_mins)
+    chapter_block = "Timestamps:\n" + "\n".join(f"{c['time']} {c['title']}" for c in chapters)
+    if not all(f"{c['time']} {c['title']}" in desc for c in chapters):
+        desc = f"{desc}\n\n{chapter_block}"
+    if attribution not in desc:
+        desc = f"{desc}\n\n{attribution}"
     print(f"  • Title: {title}")
 
     if dry_run:
         print("\n[DRY RUN] Finished without uploading. Video saved at:", video_path)
-        save_published_entry(video_path, yt_id=None, fb_id=None, title=title, chapters=chapters)
+        print("[DRY RUN] Publication log untouched.")
         return True
 
     # Step 5: Upload to Platforms
@@ -252,7 +291,9 @@ def run_pipeline(minutes=15, force_yt=None, dry_run=False, video_path=None):
         print(f"[FACEBOOK NOTE] Facebook upload error: {e_fb}")
 
     # Save to Published Log
-    save_published_entry(video_path, yt_id=yt_video_id, fb_id=fb_video_id, title=title, chapters=chapters)
+    save_published_entry(video_path, yt_id=yt_video_id, fb_id=fb_video_id,
+                         title=title, chapters=chapters, seed=seed,
+                         piece_title=song_title)
 
     # Export copy to FINAL_EXPORTED_VIDEOS already handled by bot.py
     print("\n" + "="*70)
