@@ -2,8 +2,9 @@ name: PianoSpheric Daily Long-Form Automation
 
 on:
   schedule:
-    # Runs daily at 9:00 AM UTC
-    - cron: '0 9 * * *'
+    # Daily at 8:15 AM UTC - just after YouTube's quota resets at
+    # midnight Pacific, so the day's single upload is always available.
+    - cron: '15 8 * * *'
   workflow_dispatch:
     inputs:
       upload_youtube:
@@ -164,6 +165,7 @@ jobs:
             output/thumb_*.jpg
             output/*_chapters.txt
             output/_smoke_frame.jpg
+            output/PianoSpheric_*.mp4
           if-no-files-found: ignore
           retention-days: 7
 
