@@ -42,8 +42,8 @@ GEN_API = "https://gen.pollinations.ai"
 
 from bot import generate_longform_video
 from thumbnail_generator import create_pianospheric_thumbnail
-from publish_youtube import upload_to_youtube, set_video_thumbnail
-from publish_facebook import upload_to_facebook
+from publish_youtube import upload_to_youtube, set_video_thumbnail, validate_youtube_credentials
+from publish_facebook import upload_to_facebook, get_facebook_credentials
 
 def get_published_history():
     if os.path.exists(PUBLISHED_LOG):
@@ -192,6 +192,22 @@ def run_pipeline(minutes=15, force_yt=None, dry_run=False, video_path=None):
     upload_yt, schedule_reason = should_publish_to_youtube(force_yt)
     print(f"[SCHEDULE] {schedule_reason}")
 
+    started = time.time()
+    if upload_yt and not dry_run:
+        yt_ok, yt_reason = validate_youtube_credentials()
+        print(f"[PREFLIGHT] YouTube token: {yt_reason}")
+        fatal = yt_reason.startswith("missing") or "invalid_grant" in yt_reason.lower()
+        if not yt_ok and fatal:
+            raise SystemExit(
+                "[PREFLIGHT] YouTube credentials are unusable; aborting before the render. "
+                "Refresh the OAuth token and update the repo secrets, then re-run."
+            )
+    try:
+        fb_ok = all(get_facebook_credentials())
+    except Exception:
+        fb_ok = False
+    print(f"[PREFLIGHT] Facebook creds: {'OK' if fb_ok else 'missing (skipped)'}")
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # Step 2: Render or Use Existing Video
@@ -209,6 +225,7 @@ def run_pipeline(minutes=15, force_yt=None, dry_run=False, video_path=None):
             output_filename=out_name,
             avoid_titles=used_titles
         )
+        print(f"[TIME] render finished in {(time.time() - started) / 60:.1f} min")
 
     # Load composition metadata (title, seed, chapters) from the render
     meta = load_render_meta(video_path)
@@ -265,7 +282,7 @@ def run_pipeline(minutes=15, force_yt=None, dry_run=False, video_path=None):
         return True
 
     # Step 5: Upload to Platforms
-    # YouTube Upload (Mon, Wed, Fri)
+    # YouTube Upload (daily, one original suite per run)
     yt_video_id = None
     if upload_yt:
         print(f"\n>>> [4/5] Uploading to YouTube ({CHANNEL_NAME})...")
@@ -304,6 +321,7 @@ def run_pipeline(minutes=15, force_yt=None, dry_run=False, video_path=None):
         print(f"YouTube URL: https://youtu.be/{yt_video_id}")
     if fb_video_id:
         print(f"Facebook Video ID: {fb_video_id}")
+    print(f"[TIME] total pipeline: {(time.time() - started) / 60:.1f} min")
     print("="*70 + "\n")
 
     return True
