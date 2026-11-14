@@ -307,10 +307,14 @@ def run_pipeline(minutes=15, force_yt=None, dry_run=False, video_path=None):
     except Exception as e_fb:
         print(f"[FACEBOOK NOTE] Facebook upload error: {e_fb}")
 
-    # Save to Published Log
-    save_published_entry(video_path, yt_id=yt_video_id, fb_id=fb_video_id,
-                         title=title, chapters=chapters, seed=seed,
-                         piece_title=song_title)
+    # Only log real publications; a failed upload must not inflate the
+    # episode counter or block its title from being reused.
+    if yt_video_id or fb_video_id:
+        save_published_entry(video_path, yt_id=yt_video_id, fb_id=fb_video_id,
+                             title=title, chapters=chapters, seed=seed,
+                             piece_title=song_title)
+    else:
+        print("[LOG] Nothing published; no history entry written.")
 
     # Export copy to FINAL_EXPORTED_VIDEOS already handled by bot.py
     print("\n" + "="*70)
@@ -324,6 +328,11 @@ def run_pipeline(minutes=15, force_yt=None, dry_run=False, video_path=None):
     print(f"[TIME] total pipeline: {(time.time() - started) / 60:.1f} min")
     print("="*70 + "\n")
 
+    if upload_yt and not yt_video_id:
+        raise SystemExit(
+            "[ERROR] YouTube upload was due this run but did not succeed. "
+            "Failing the job so nobody assumes a video was published."
+        )
     return True
 
 if __name__ == '__main__':

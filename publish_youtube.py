@@ -55,12 +55,8 @@ def get_authenticated_service():
                 except Exception as e:
                     print(f"[youtube] Error reading {p}: {e}")
 
-    def mask(s):
-        return f"{s[:4]}...{s[-4:]}" if s and len(s) > 8 else "MISSING"
-
-    print(f"[youtube] Client ID: {mask(client_id)}")
-    print(f"[youtube] Client Secret: {mask(client_secret)}")
-    print(f"[youtube] Refresh Token: {mask(refresh_token)}")
+    if all([client_id, client_secret, refresh_token]):
+        print("[youtube] Credentials loaded (values not logged).")
 
     if not all([client_id, client_secret, refresh_token]):
         raise ValueError(

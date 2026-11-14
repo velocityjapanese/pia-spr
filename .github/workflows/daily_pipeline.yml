@@ -142,6 +142,10 @@ jobs:
         timeout-minutes: 75
         env:
           UPLOAD_YOUTUBE: ${{ steps.schedule_check.outputs.should_upload }}
+          # Bound the resumable upload so a stalled connection fails in
+          # minutes instead of hanging until the job timeout.
+          PIA_YT_UPLOAD_TIMEOUT_SEC: '900'
+          PIA_YT_MAX_CHUNKS: '200'
         run: |
           mins="${{ github.event.inputs.duration_minutes }}"
           if [ -z "$mins" ]; then mins="15"; fi
