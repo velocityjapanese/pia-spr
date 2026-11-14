@@ -10,6 +10,7 @@ Full End-to-End Orchestrator:
 7. Saves publication history & cleans up temporary video files
 """
 import os
+import re
 import sys
 import json
 import random
@@ -89,6 +90,80 @@ def load_render_meta(video_file):
                 print(f"[META NOTE] Could not read {path}: {e}")
     return {}
 
+# YouTube's spam/deceptive-practices policy treats titles, thumbnails and
+# descriptions as misleading metadata when they promise something the video
+# does not deliver, so AI copy is never trusted verbatim: false duration
+# claims, composer names, health claims and invented links are rejected and
+# the deterministic template is used instead.
+_TIME_CLAIM_RE = re.compile(r"(\d+)\s*[- ]?\s*(hours?|hrs?|h|minutes?|mins?)\b", re.IGNORECASE)
+_URL_RE = re.compile(r"https?://|www\.", re.IGNORECASE)
+_TIMESTAMP_LINE_RE = re.compile(r"^\s*\d{1,2}:\d{2}(?::\d{2})?\b.*$", re.MULTILINE)
+_TIMESTAMP_HEADING_RE = re.compile(r"(?im)^\s*(timestamps?|chapters?)\s*:?\s*$")
+
+_MISLEADING_TERMS = (
+    "mozart", "beethoven", "chopin", "bach", "debussy", "satie", "liszt",
+    "rachmaninoff", "tchaikovsky", "vivaldi", "einaudi", "yiruma",
+    "432hz", "432 hz", "binaural", "subliminal", "hypnosis", "8d audio",
+    "guaranteed", "scientifically proven", "instantly fall asleep",
+)
+
+_BANNED_CLAIM_TERMS = (
+    "cure", "heal", "hypnosis", "subliminal", "binaural", "guaranteed",
+    "scientifically proven", "instantly fall asleep", "treats anxiety",
+    "treats insomnia", "medical treatment",
+)
+
+
+def _title_is_safe(title, duration_mins, piece_title=None):
+    if not title or len(title) > 100 or "piano" not in title.lower():
+        return False
+    lowered = title.lower()
+    if piece_title and piece_title.lower() not in lowered:
+        return False  # keep each upload identifiably distinct
+    if any(term in lowered for term in _MISLEADING_TERMS):
+        return False
+    for amount, unit in _TIME_CLAIM_RE.findall(lowered):
+        if unit.startswith(("hour", "hr", "h")):
+            return False  # this channel publishes ~15-minute suites, not hours
+        if int(amount) != duration_mins:
+            return False
+    return True
+
+
+def _sanitize_ai_description(desc, chapters_formatted):
+    if not isinstance(desc, str) or not desc.strip() or len(desc) > 4800:
+        return None
+    if _URL_RE.search(desc):
+        return None  # the model must never invent links
+    if any(term in desc.lower() for term in _BANNED_CLAIM_TERMS):
+        return None
+    # Drop any timestamps the model invented, then attach the real chapter map.
+    body = _TIMESTAMP_HEADING_RE.sub("", desc)
+    body = _TIMESTAMP_LINE_RE.sub("", body)
+    body = re.sub(r"\n{3,}", "\n\n", body).strip()
+    if not body:
+        return None
+    return f"{body}\n\nTimestamps:\n{chapters_formatted}"
+
+
+def _sanitize_tags(tags, fallback):
+    clean, seen, total = [], set(), 0
+    for tag in tags or ():
+        if not isinstance(tag, str):
+            continue
+        tag = tag.strip().strip(",")
+        if not tag or len(tag) > 60 or tag.lower() in seen:
+            continue
+        if any(term in tag.lower() for term in _MISLEADING_TERMS):
+            continue
+        if total + len(tag) > 500:
+            break
+        seen.add(tag.lower())
+        clean.append(tag)
+        total += len(tag)
+    return clean[:15] or fallback
+
+
 def generate_seo_metadata(song_title, chapters, duration_mins=15):
     """
     Generates high-converting YouTube title, rich description with timestamps, and tags.
@@ -107,6 +182,8 @@ def generate_seo_metadata(song_title, chapters, duration_mins=15):
         f"'{duration_mins} Min Relaxing Piano | {song_title} · Original Cinematic Piano (1080p HD)'\n"
         "- Generate an engaging, atmospheric description (4-6 sentences) inviting listeners to relax, meditate, "
         f"work, or sleep, asking viewers what they are focusing on today, and encouraging subscriptions to {CHANNEL_NAME}.\n"
+        "- Title and description must be accurate: do not name real composers or artists, do not claim hours of "
+        "music, do not make health claims (cure/heal/treat anxiety or insomnia), and do not include any links.\n"
         f"- The description MUST include this exact chapter timestamp list:\n{chapters_formatted}\n\n"
         "- Include relevant hashtags: #piano #relaxingpiano #studymusic #sleepmusic #pianospheric #ambientpiano #deepfocus #meditation #originalmusic\n\n"
         "Return ONLY a valid JSON object without markdown fences, with this exact schema:\n"
@@ -116,6 +193,12 @@ def generate_seo_metadata(song_title, chapters, duration_mins=15):
         '  "tags": ["piano", "relaxing piano", "study music", "sleep music", "piano visualizer", "pianospheric", "meditation piano", "calm piano", "peaceful piano", "ambient piano", "deep focus", "instrumental piano", "original composition"]\n'
         "}"
     )
+
+    tags = [
+        "piano", "relaxing piano", "study music", "sleep music", "piano visualizer",
+        "pianospheric", "meditation piano", "calm piano", "peaceful piano", "ambient piano",
+        "deep focus", "instrumental piano", "original composition", "stress relief"
+    ]
 
     if POLLINATIONS_KEY:
         try:
@@ -136,9 +219,10 @@ def generate_seo_metadata(song_title, chapters, duration_mins=15):
                     raw_txt = raw_txt[:-3]
                 data = json.loads(raw_txt.strip())
                 title = (data.get("title") or "").strip()
-                if title and len(title) <= 100 and "piano" in title.lower():
-                    return title, data.get("description"), data.get("tags")
-                print("[AI NOTE] Title rejected (too long or missing 'piano'); using template.")
+                desc = _sanitize_ai_description(data.get("description"), chapters_formatted)
+                if _title_is_safe(title, duration_mins, song_title) and desc:
+                    return title, desc, _sanitize_tags(data.get("tags"), tags)
+                print("[AI NOTE] Metadata rejected by policy checks; using template.")
         except Exception as e:
             print(f"[AI NOTE] Pollinations API request error: {e}")
 
@@ -153,11 +237,6 @@ def generate_seo_metadata(song_title, chapters, duration_mins=15):
         f"🎹 Welcome to {CHANNEL_NAME}. Subscribe for a brand-new original piano suite every day.\n\n"
         f"#piano #relaxingpiano #studymusic #sleepmusic #pianospheric #ambientpiano #deepfocus #originalmusic"
     )
-    tags = [
-        "piano", "relaxing piano", "study music", "sleep music", "piano visualizer",
-        "pianospheric", "meditation piano", "calm piano", "peaceful piano", "ambient piano",
-        "deep focus", "instrumental piano", "original composition", "stress relief"
-    ]
     return title, desc, tags
 
 def should_publish_to_youtube(force_yt=None):

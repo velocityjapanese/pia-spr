@@ -129,6 +129,28 @@ def validate_youtube_credentials(timeout_sec=30):
     return True, "token refresh OK"
 
 
+def _clean_tags(tags, limit=15, max_total=500):
+    """YouTube rejects videos whose tags exceed 500 characters, and tags must
+    describe the actual content (no '432hz'/'binaural' claims this audio does
+    not make). Dedupe, cap and drop unsupported claims."""
+    banned = ("432hz", "432 hz", "binaural", "subliminal", "8d audio")
+    clean, seen, total = [], set(), 0
+    for tag in tags or ():
+        if not isinstance(tag, str):
+            continue
+        tag = tag.strip().strip(",")
+        if not tag or len(tag) > 60 or tag.lower() in seen:
+            continue
+        if any(word in tag.lower() for word in banned):
+            continue
+        if total + len(tag) > max_total:
+            break
+        seen.add(tag.lower())
+        clean.append(tag)
+        total += len(tag)
+    return clean[:limit] or ["piano", "relaxing piano"]
+
+
 def upload_to_youtube(video_path, title, description, tags=None, category_id="10", privacy_status="public"):
     """
     Uploads long-form video to YouTube. Category 10 = Music.
@@ -142,9 +164,10 @@ def upload_to_youtube(video_path, title, description, tags=None, category_id="10
     if tags is None:
         tags = [
             "piano", "relaxing piano", "study music", "sleep music", "piano visualizer",
-            "pianospheric", "meditation piano", "432hz piano", "calm piano", "peaceful piano",
+            "pianospheric", "meditation piano", "calm piano", "peaceful piano",
             "ambient piano", "deep focus", "15 min piano", "instrumental piano"
         ]
+    tags = _clean_tags(tags)
 
     youtube = get_authenticated_service()
 
@@ -158,6 +181,9 @@ def upload_to_youtube(video_path, title, description, tags=None, category_id="10
         "status": {
             "privacyStatus": privacy_status,
             "selfDeclaredMadeForKids": False
+            # containsSyntheticMedia is deliberately unset: YouTube requires
+            # disclosure only for realistic depictions of real people/events,
+            # and animated piano visuals are exempt.
         }
     }
 

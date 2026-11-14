@@ -96,7 +96,12 @@ def generate_longform_video(mood="relaxing", title=None, bars=16, tempo=None,
         "duration": timeline["duration"],
         "sections": sections,
         "chapters": comp["chapters"],
-        "attribution": "Piano: Salamander Grand Piano (Alexander Holm), CC-BY 3.0.",
+        "attribution": (
+            "Original composition. Piano samples: Salamander Grand Piano V3 by "
+            "Alexander Holm, CC BY 3.0 "
+            "(https://creativecommons.org/licenses/by/3.0/); audio rendered from "
+            "the samples with FluidSynth."
+        ),
     }
     meta_path = final_mp4.replace(".mp4", "_meta.json")
     with open(meta_path, "w", encoding="utf-8") as f:
