@@ -1,9 +1,10 @@
 name: PianoSpheric Daily Long-Form Automation
 
 on:
-  # schedule re-enabled after today's manual publish completes
-  # schedule:
-  #   - cron: '15 8 * * *'
+  schedule:
+    # Daily at 08:00 UTC (midnight Pacific), when YouTube's upload quota
+    # resets. The upload happens ~18 minutes into the run, safely after it.
+    - cron: '0 8 * * *'
   workflow_dispatch:
     inputs:
       upload_youtube:
