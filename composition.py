@@ -418,6 +418,7 @@ def compose(target_minutes=15, seed=None, output_dir=None, base_name=None,
             "bpm": sec.bpm,
             "palette": sec.palette,
             "register": sec.register,
+            "key": f"{tonic_name} {mode}",
         })
         chapters.append({"time": _mmss(sec_start_sec), "title": sec.name})
 

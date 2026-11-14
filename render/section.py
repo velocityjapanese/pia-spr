@@ -8,6 +8,8 @@ from config import FFMPEG, FFPROBE, FPS, H, SCROLL_PX_PER_FRAME, STRIP_H, STRIP_
 from render.keyboard_strip import stream_section
 from render.notes_layer import render_roll
 from render.scene import make_background, make_distance_layers, make_title_card
+from render.score_layer import (CROP_EXPR, FRAME_PAD, PANEL_X, PANEL_Y, WIN_H,
+                                WIN_W, WIN_X, WIN_Y, build_score_assets)
 
 ENC_ARGS = [
     "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
@@ -41,15 +43,30 @@ def render_section(task):
     title = make_title_card(section["name"], section["palette"])
     title.save(paths["title"])
     render_roll(section, notes, paths["roll"])
+    score = build_score_assets(section, notes, work_dir)
     dof_mask, dist_grad = make_distance_layers(section["index"], work_dir)
-    _encode(section, notes, paths, seed, dof_mask, dist_grad)
+    _encode(section, notes, paths, seed, dof_mask, dist_grad, score)
     if not _valid_section(paths["out"], section["frames"]):
         raise RuntimeError(f"section {section['index']} produced an invalid file")
     return paths["out"], False
 
 
-def _encode(section, notes, paths, seed, dof_mask, dist_grad):
+def _encode(section, notes, paths, seed, dof_mask, dist_grad, score=None):
     frames = section["frames"]
+    score_chain = ""
+    final_label = "v2"
+    if score:
+        score_chain = (
+            "[6:v]format=rgba,loop=loop=-1:size=1:start=0,"
+            f"crop={WIN_W}:{WIN_H}:0:{CROP_EXPR},"
+            "fade=t=in:st=2.25:d=0.75:alpha=1[score]; "
+            "[7:v]format=rgba,loop=loop=-1:size=1:start=0,"
+            "fade=t=in:st=2.25:d=0.75:alpha=1[scoref]; "
+            f"[v2][score]overlay={WIN_X}:{WIN_Y}:eof_action=repeat[v3]; "
+            f"[v3][scoref]overlay={PANEL_X - FRAME_PAD}:"
+            f"{PANEL_Y - FRAME_PAD}:eof_action=repeat[v4]; "
+        )
+        final_label = "v4"
     filter_graph = (
         "[0:v]format=gbrp,loop=loop=-1:size=1:start=0[bg]; "
         f"[1:v]format=gbrp,loop=loop=-1:size=1:start=0,crop={W}:{H}:0:(ih-{H})-{SCROLL_PX_PER_FRAME}*n[roll]; "
@@ -69,7 +86,8 @@ def _encode(section, notes, paths, seed, dof_mask, dist_grad):
         "[2:v]format=rgba,loop=loop=-1:size=1:start=0,"
         "fade=t=in:st=0:d=0.45:alpha=1,fade=t=out:st=1.55:d=0.55:alpha=1[t]; "
         "[v1][t]overlay=0:0:enable='lte(t,2.2)'[v2]; "
-        "[v2]eq=contrast=1.04:saturation=1.12:gamma=1.05,format=yuv420p[v]"
+        f"{score_chain}"
+        f"[{final_label}]eq=contrast=1.04:saturation=1.12:gamma=1.05,format=yuv420p[v]"
     )
     cmd = [
         FFMPEG, "-y", "-hide_banner", "-loglevel", "warning", "-nostats",
@@ -80,6 +98,11 @@ def _encode(section, notes, paths, seed, dof_mask, dist_grad):
         "-video_size", f"{W}x{STRIP_H}", "-framerate", str(FPS), "-i", "pipe:0",
         "-framerate", str(FPS), "-i", dof_mask,
         "-framerate", str(FPS), "-i", dist_grad,
+    ]
+    if score:
+        cmd += ["-framerate", str(FPS), "-i", score[0],
+                "-framerate", str(FPS), "-i", score[1]]
+    cmd += [
         "-filter_complex", filter_graph,
         "-map", "[v]", "-frames:v", str(frames), "-r", str(FPS),
         *ENC_ARGS, paths["out"],
