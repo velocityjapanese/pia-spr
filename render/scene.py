@@ -212,31 +212,32 @@ def draw_tracked(draw, x, y, text, font, fill, tracking=0):
     return cursor
 
 
-def make_title_card(section_name, palette_name, width=W, height=H):
+def make_title_card(section_name, palette_name, width=W, height=H, center_x=None):
     pal = palette(palette_name)
     img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     numeral, _, name = section_name.partition(". ")
     if not name:
         name, numeral = section_name, ""
+    cx = width / 2 if center_x is None else center_x
 
     f_num = load_font("sans", 19)
     f_name = load_font("serif", 64)
 
     label = f"MOVEMENT {numeral}".strip()
     label_w = sum(ImageDraw.Draw(img).textlength(c, font=f_num) + 7 for c in label) - 7
-    lx = (width - label_w) / 2
+    lx = cx - label_w / 2
     ly = 96
     draw = ImageDraw.Draw(img)
     draw_tracked(draw, lx, ly, label, f_num, pal["accent"] + (215,), tracking=7)
 
     name_w = draw.textlength(name, font=f_name)
-    nx = (width - name_w) / 2
+    nx = cx - name_w / 2
     ny = 124
     draw.text((nx + 2, ny + 2), name, font=f_name, fill=(0, 0, 0, 140))
     draw.text((nx, ny), name, font=f_name, fill=pal["title"] + (255,))
 
     line_y = ny + 86
-    draw.line([(width / 2 - 46, line_y), (width / 2 + 46, line_y)],
+    draw.line([(cx - 46, line_y), (cx + 46, line_y)],
               fill=pal["accent"] + (90,), width=1)
     return img
 

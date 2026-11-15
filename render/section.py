@@ -8,6 +8,7 @@ from config import FFMPEG, FFPROBE, FPS, H, SCROLL_PX_PER_FRAME, STRIP_H, STRIP_
 from render.keyboard_strip import stream_section
 from render.notes_layer import render_roll
 from render.scene import make_background, make_distance_layers, make_title_card
+from render.score_cursor import build_cursor_video
 from render.score_layer import (CROP_EXPR, FRAME_PAD, PANEL_X, PANEL_Y, WIN_H,
                                 WIN_W, WIN_X, WIN_Y, build_score_assets)
 
@@ -40,32 +41,45 @@ def render_section(task):
 
     bg = make_background(section["palette"], seed + section["index"])
     bg.save(paths["bg"])
-    title = make_title_card(section["name"], section["palette"])
+    title = make_title_card(section["name"], section["palette"], center_x=460)
     title.save(paths["title"])
     render_roll(section, notes, paths["roll"])
     score = build_score_assets(section, notes, work_dir)
+    cursor = build_cursor_video(section, score[2], work_dir) if score else None
     dof_mask, dist_grad = make_distance_layers(section["index"], work_dir)
-    _encode(section, notes, paths, seed, dof_mask, dist_grad, score)
+    _encode(section, notes, paths, seed, dof_mask, dist_grad, score, cursor)
     if not _valid_section(paths["out"], section["frames"]):
         raise RuntimeError(f"section {section['index']} produced an invalid file")
     return paths["out"], False
 
 
-def _encode(section, notes, paths, seed, dof_mask, dist_grad, score=None):
+def _encode(section, notes, paths, seed, dof_mask, dist_grad, score=None,
+            cursor=None):
     frames = section["frames"]
+    dur = frames / FPS
+    out_st = max(3.0, dur - 1.3)
     score_chain = ""
     final_label = "v2"
     if score:
-        score_chain = (
+        parts = [
             "[6:v]format=rgba,loop=loop=-1:size=1:start=0,"
             f"crop={WIN_W}:{WIN_H}:0:{CROP_EXPR},"
-            "fade=t=in:st=2.25:d=0.75:alpha=1[score]; "
+            f"fade=t=out:st={out_st:.2f}:d=1.3:alpha=1[score]; ",
             "[7:v]format=rgba,loop=loop=-1:size=1:start=0,"
-            "fade=t=in:st=2.25:d=0.75:alpha=1[scoref]; "
-            f"[v2][score]overlay={WIN_X}:{WIN_Y}:eof_action=repeat[v3]; "
-            f"[v3][scoref]overlay={PANEL_X - FRAME_PAD}:"
-            f"{PANEL_Y - FRAME_PAD}:eof_action=repeat[v4]; "
-        )
+            f"fade=t=out:st={out_st:.2f}:d=1.3:alpha=1[scoref]; ",
+            f"[v2][score]overlay={WIN_X}:{WIN_Y}:eof_action=repeat[v3]; ",
+        ]
+        under = "v3"
+        if cursor:
+            parts.append(
+                "[8:v]format=rgba,"
+                f"fade=t=out:st={out_st:.2f}:d=1.3:alpha=1[cursor]; "
+                f"[v3][cursor]overlay={WIN_X}:{WIN_Y}:eof_action=repeat[v3c]; ")
+            under = "v3c"
+        parts.append(
+            f"[{under}][scoref]overlay={PANEL_X - FRAME_PAD}:"
+            f"{PANEL_Y - FRAME_PAD}:eof_action=repeat[v4]; ")
+        score_chain = "".join(parts)
         final_label = "v4"
     filter_graph = (
         "[0:v]format=gbrp,loop=loop=-1:size=1:start=0[bg]; "
@@ -102,6 +116,8 @@ def _encode(section, notes, paths, seed, dof_mask, dist_grad, score=None):
     if score:
         cmd += ["-framerate", str(FPS), "-i", score[0],
                 "-framerate", str(FPS), "-i", score[1]]
+    if cursor:
+        cmd += ["-i", cursor]
     cmd += [
         "-filter_complex", filter_graph,
         "-map", "[v]", "-frames:v", str(frames), "-r", str(FPS),
