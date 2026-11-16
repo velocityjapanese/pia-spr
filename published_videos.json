@@ -354,5 +354,42 @@
       }
     ],
     "timestamp": "2026-11-15T15:22:05.305150+00:00"
+  },
+  {
+    "video_file": "PianoSpheric_15min_20261116_173210.mp4",
+    "youtube_id": "hAflza_VtVg",
+    "youtube_url": "https://youtu.be/hAflza_VtVg",
+    "facebook_id": null,
+    "facebook_url": null,
+    "title": "15 Min Relaxing Piano | Valse in the Northern Lights · Original Cinematic Piano (HD)",
+    "piece_title": "Valse in the Northern Lights",
+    "seed": 1693569348,
+    "chapters": [
+      {
+        "time": "00:00",
+        "title": "I. Reverie"
+      },
+      {
+        "time": "02:50",
+        "title": "II. Tide"
+      },
+      {
+        "time": "05:35",
+        "title": "III. Ascent"
+      },
+      {
+        "time": "08:06",
+        "title": "IV. Embers"
+      },
+      {
+        "time": "11:01",
+        "title": "V. Radiance"
+      },
+      {
+        "time": "13:13",
+        "title": "VI. Dusk"
+      }
+    ],
+    "timestamp": "2026-11-16T17:52:16.747520+00:00"
   }
 ]
