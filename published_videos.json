@@ -428,5 +428,42 @@
       }
     ],
     "timestamp": "2026-11-17T17:23:05.607989+00:00"
+  },
+  {
+    "video_file": "PianoSpheric_15min_20261118_164551.mp4",
+    "youtube_id": "cAPwND0P9Fo",
+    "youtube_url": "https://youtu.be/cAPwND0P9Fo",
+    "facebook_id": null,
+    "facebook_url": null,
+    "title": "15 Min Relaxing Piano | Aubade beyond the Velvet Sky · Original Cinematic Piano",
+    "piece_title": "Aubade beyond the Velvet Sky",
+    "seed": 907343474,
+    "chapters": [
+      {
+        "time": "00:00",
+        "title": "I. Embers"
+      },
+      {
+        "time": "02:45",
+        "title": "II. Reverie"
+      },
+      {
+        "time": "05:25",
+        "title": "III. Dusk"
+      },
+      {
+        "time": "07:51",
+        "title": "IV. Tide"
+      },
+      {
+        "time": "10:40",
+        "title": "V. Horizon"
+      },
+      {
+        "time": "12:48",
+        "title": "VI. Ascent"
+      }
+    ],
+    "timestamp": "2026-11-18T17:04:56.927745+00:00"
   }
 ]
