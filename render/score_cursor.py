@@ -22,6 +22,8 @@ from render.score_layer import SPEED, WIN_H, WIN_W
 
 GLOW_W, GLOW_H = 63, 43
 LINE_RADIUS = 5
+GLOW_IN = 0.12                   # seconds to ramp a new onset up
+GLOW_OUT = 0.20                  # seconds to let a released onset fade
 _LINE_ALPHA = (0, 45, 105, 165, 215, 255, 215, 165, 105, 45, 0)
 _CORE_RGB = (255, 249, 252)
 
@@ -67,6 +69,14 @@ def _build(section, notes_path, work_dir):
     frames = int(section["frames"])
     out = cursor_video_path(work_dir, section["index"])
 
+    flat = []
+    for si, s in enumerate(systems):
+        for o in s["onsets"]:
+            o.setdefault("hold", o["t"] + 0.4)
+            flat.append((o["t"], o["hold"], si, o))
+    flat.sort(key=lambda r: r[0])
+    state = {"k": 0, "live": []}
+
     cmd = [FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
            "-f", "rawvideo", "-pix_fmt", "rgba",
            "-s", f"{WIN_W}x{WIN_H}", "-framerate", str(FPS),
@@ -76,7 +86,7 @@ def _build(section, notes_path, work_dir):
     try:
         for n in range(frames):
             t = t0 + n / FPS
-            layer = _compose(t, t0, systems, starts, accent, core)
+            layer = _compose(t, t0, systems, starts, accent, core, flat, state)
             proc.stdin.write(layer.tobytes())
     finally:
         proc.stdin.close()
@@ -86,8 +96,32 @@ def _build(section, notes_path, work_dir):
     return out
 
 
-def _compose(t, t0, systems, starts, accent, core):
+def _compose(t, t0, systems, starts, accent, core, flat, state):
     layer = np.zeros((WIN_H, WIN_W, 4), dtype=np.float32)
+    scroll = (t - t0) * SPEED
+
+    # Every onset still sounding keeps its noteheads lit, so a held chord
+    # stays highlighted until the notes are actually released.
+    k = state["k"]
+    live = [a for a in state["live"] if a[1] + GLOW_OUT >= t]
+    while k < len(flat) and flat[k][0] <= t:
+        if flat[k][1] + GLOW_OUT >= t:
+            live.append(flat[k])
+        k += 1
+    state["k"] = k
+    state["live"] = live
+    for ot, hold, si, onset in live:
+        sys_ = systems[si]
+        y_top = sys_["roll_y"] - scroll
+        if y_top + sys_["img_h"] < 0 or y_top > WIN_H:
+            continue
+        mul = min(1.0, (t - ot) / GLOW_IN, (hold + GLOW_OUT - t) / GLOW_OUT)
+        if mul <= 0.0:
+            continue
+        for hx, hy in onset["heads"]:
+            cx = int(round(sys_["img_x"] + hx * sys_["img_w"]))
+            cy = int(round(y_top + hy * sys_["img_h"]))
+            _paste_glow(layer, cx, cy, accent, mul)
 
     idx = bisect.bisect_right(starts, t) - 1
     if idx < 0:
@@ -99,7 +133,6 @@ def _compose(t, t0, systems, starts, accent, core):
     pos = bisect.bisect_right(times, t) - 1
     if pos < 0:
         x_norm = sys_["onsets"][0]["x"]
-        current = sys_["onsets"][0]
     else:
         current = sys_["onsets"][pos]
         x_norm = current["x"]
@@ -111,16 +144,10 @@ def _compose(t, t0, systems, starts, accent, core):
                 smooth = p * p * (3 - 2 * p)
                 x_norm = current["x"] + (nxt["x"] - current["x"]) * smooth
 
-    y_top = sys_["roll_y"] - (t - t0) * SPEED
+    y_top = sys_["roll_y"] - scroll
     y_bot = y_top + sys_["img_h"]
     if y_bot < 0 or y_top > WIN_H:
-        return np.zeros((WIN_H, WIN_W, 4), dtype=np.uint8)
-
-    # Glow on every notehead of the sounding chord.
-    for hx, hy in current["heads"]:
-        cx = int(round(sys_["img_x"] + hx * sys_["img_w"]))
-        cy = int(round(y_top + hy * sys_["img_h"]))
-        _paste_glow(layer, cx, cy, accent)
+        return np.clip(layer, 0, 255).astype(np.uint8)
 
     # Vertical cursor line through the staff.
     cx = int(round(sys_["img_x"] + x_norm * sys_["img_w"]))
@@ -129,7 +156,7 @@ def _compose(t, t0, systems, starts, accent, core):
     return np.clip(layer, 0, 255).astype(np.uint8)
 
 
-def _paste_glow(layer, cx, cy, accent):
+def _paste_glow(layer, cx, cy, accent, mul=1.0):
     x0 = cx - GLOW_W // 2
     y0 = cy - GLOW_H // 2
     x1, y1 = x0 + GLOW_W, y0 + GLOW_H
@@ -141,7 +168,8 @@ def _paste_glow(layer, cx, cy, accent):
     mask = GLOW[sy0:sy0 + (y1 - y0), sx0:sx0 + (x1 - x0)]
     core = CORE[sy0:sy0 + (y1 - y0), sx0:sx0 + (x1 - x0)]
     sub = layer[y0:y1, x0:x1]
-    sub[..., 3] = np.maximum(sub[..., 3], np.maximum(mask, core))
+    sub[..., 3] = np.maximum(sub[..., 3],
+                             np.maximum(mask, core) * np.float32(mul))
     hit = mask > 0
     for c in range(3):
         sub[..., c] = np.where(hit, accent[c], sub[..., c])

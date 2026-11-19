@@ -5,6 +5,7 @@ staff and the performance cannot drift. Each section is engraved once into a
 tall RGBA strip; ffmpeg crops it at a constant rate, putting every bar under
 the playhead exactly when it sounds.
 """
+import bisect
 import io
 import json
 import os
@@ -27,10 +28,10 @@ WIN_X = PANEL_X + INSET
 WIN_Y = PANEL_Y + HEADER_H
 WIN_W = PANEL_W - 2 * INSET
 WIN_H = PANEL_H - HEADER_H - INSET
-SPEED = 18.0                     # score pixels per second
+SPEED = 15.0                     # score pixels per second
 CROP_EXPR = f"(n*{int(SPEED)}/{FPS})"
-PLAYHEAD = 0.34
-TARGET_SYSTEM_SEC = 10.5
+PLAYHEAD = 0.55                  # fraction of the window above the cursor
+TARGET_SYSTEM_SEC = 11.5
 QUANT = 0.25                     # 16th-note grid
 
 SCORE_RGB = (236, 242, 250)
@@ -99,7 +100,9 @@ def _build(section, notes, work_dir):
     bar_sec = 240.0 / bpm
     total_bars = max(1, int(round(sec_dur / bar_sec)))
     target = max(1, min(6, int(round(TARGET_SYSTEM_SEC / bar_sec))))
-    systems = max(1, int(round(total_bars / target)))
+    # Floor rather than round: a remainder system of one or two bars renders
+    # far smaller than the rest, so keep every system at least `target` bars.
+    systems = max(1, total_bars // target)
     base, extra = divmod(total_bars, systems)
     sizes = [base + 1] * extra + [base] * (systems - extra)
 
@@ -436,6 +439,17 @@ def _engrave_system(section, notes, bar_start, bar_end, fifths, mode_str,
     onsets.sort(key=lambda o: o["t"])
     if not onsets:
         return None
+    # How long each onset is actually sounding: highlight every note of the
+    # chord until the last of them is released, so nothing lights up and then
+    # scrolls away while it is still playing.
+    ends = sorted((float(n["start"]), float(n["end"])) for n in notes)
+    for onset in onsets:
+        hold = onset["t"] + 0.4
+        i = bisect.bisect_left(ends, (onset["t"] - 0.06, -1e9))
+        while i < len(ends) and ends[i][0] <= onset["t"] + 0.06:
+            hold = max(hold, ends[i][1])
+            i += 1
+        onset["hold"] = hold
     return white, onsets
 
 
