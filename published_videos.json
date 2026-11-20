@@ -502,5 +502,42 @@
       }
     ],
     "timestamp": "2026-11-20T07:27:06.629831+00:00"
+  },
+  {
+    "video_file": "PianoSpheric_15min_20261120_162911.mp4",
+    "youtube_id": "344CNDpjyQM",
+    "youtube_url": "https://youtu.be/344CNDpjyQM",
+    "facebook_id": null,
+    "facebook_url": null,
+    "title": "15 Min Relaxing Piano | Aubade in the Endless Blue · Original Cinematic Piano",
+    "piece_title": "Aubade in the Endless Blue",
+    "seed": 355529394,
+    "chapters": [
+      {
+        "time": "00:00",
+        "title": "I. Horizon"
+      },
+      {
+        "time": "02:53",
+        "title": "II. Return"
+      },
+      {
+        "time": "05:40",
+        "title": "III. Tide"
+      },
+      {
+        "time": "07:57",
+        "title": "IV. Embers"
+      },
+      {
+        "time": "10:55",
+        "title": "V. Drift"
+      },
+      {
+        "time": "12:53",
+        "title": "VI. Cascade"
+      }
+    ],
+    "timestamp": "2026-11-20T16:47:39.924105+00:00"
   }
 ]
