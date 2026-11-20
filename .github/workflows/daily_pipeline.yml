@@ -71,10 +71,10 @@ jobs:
           cache: 'pip'
 
       - name: Install system dependencies
-        timeout-minutes: 10
+        timeout-minutes: 30
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg fluidsynth xz-utils
+          sudo apt-get -o Acquire::Retries=5 update -qq || sudo apt-get update
+          sudo apt-get install -y -qq -o Acquire::Retries=5 ffmpeg fluidsynth xz-utils
 
       - name: Cache Salamander Grand Piano
         uses: actions/cache@v4
