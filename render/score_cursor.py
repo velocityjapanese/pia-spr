@@ -1,13 +1,14 @@
-"""Note-accurate follow cursor for the score panel.
+"""Note-accurate playhead and note glow for the scrolling paper score.
 
-The panel scrolls at a constant speed, but engraved notation does not space
-notes evenly in time, so a fixed playhead line cannot point at the sounding
-note. This module draws a cursor using Verovio's own time->position map: at
-every onset the cursor sits exactly on that notehead, and between onsets it
-glides to the next one.
+The sheet crawls slowly while a system plays, then scrolls the next system
+into place before its first note. The playhead glides from notehead to
+notehead using Verovio's own time->position map, so it sits on the sounding
+note instead of drifting at a fixed scroll rate. Sounding noteheads get a soft
+blue halo, which reads as a highlighter on the cream paper without hiding the
+ink.
 
-Frames are sparse RGBA (transparent except the cursor), encoded losslessly
-with qtrle so the main ffmpeg can overlay them on the notation strip.
+Frames are sparse RGBA (transparent except the playhead and glows), encoded
+losslessly with qtrle so the main ffmpeg can overlay them on the paper page.
 """
 import bisect
 import json
@@ -17,26 +18,28 @@ import subprocess
 import numpy as np
 
 from config import FFMPEG, FPS
-from render.scene import palette
-from render.score_layer import SPEED, WIN_H, WIN_W
+from render.score_layer import WIN_H, WIN_W
 
-GLOW_W, GLOW_H = 63, 43
 LINE_RADIUS = 5
-GLOW_IN = 0.12                   # seconds to ramp a new onset up
-GLOW_OUT = 0.20                  # seconds to let a released onset fade
 _LINE_ALPHA = (0, 45, 105, 165, 215, 255, 215, 165, 105, 45, 0)
-_CORE_RGB = (255, 249, 252)
+_CORE_RGB = (92, 40, 28)
+
+GLOW_W, GLOW_H = 58, 44
+GLOW_IN = 0.10                   # seconds to ramp a new onset up
+GLOW_OUT = 0.22                  # seconds to let a released onset fade
+_GLOW_RGB = (86, 158, 214)          # soft blue, so it stands off the warm paper
 
 
 def _glow_mask():
+    """Soft warm halo: wide enough to read as light, not as an orange bubble."""
     yy, xx = np.mgrid[-1:1:complex(GLOW_H), -1:1:complex(GLOW_W)]
-    r2 = xx ** 2 + (yy * 1.3) ** 2
-    halo = np.clip(1.0 - r2, 0.0, 1.0) ** 1.6 * 185.0
-    core = np.clip(1.0 - (xx / 0.34) ** 2 - (yy / 0.42) ** 2, 0.0, 1.0) ** 0.8 * 255.0
-    return halo.astype(np.float32), core.astype(np.float32)
+    r = np.sqrt(xx ** 2 + (yy * 1.18) ** 2)
+    ring = np.exp(-((r - 0.50) / 0.32) ** 2) * 85.0
+    halo = np.clip(1.0 - r, 0.0, 1.0) ** 2 * 34.0
+    return np.clip(ring + halo, 0.0, 120.0).astype(np.float32)
 
 
-GLOW, CORE = _glow_mask()
+GLOW = _glow_mask()
 
 
 def cursor_video_path(work_dir, index):
@@ -61,21 +64,18 @@ def _build(section, notes_path, work_dir):
         s["onsets"].sort(key=lambda o: o["t"])
         s["times"] = [o["t"] for o in s["onsets"]]
     starts = [s["start"] for s in systems]
+    scroll_meta = {
+        "pad": float(data.get("pad", 0.0)),
+        "drift": float(data.get("drift", 0.0)),
+        "drift_max": float(data.get("drift_max", 0.0)),
+        "transition": float(data.get("transition", 0.0)),
+    }
 
-    accent = palette(section["palette"])["accent"]
-    accent = np.array(accent, dtype=np.float32)
-    core = np.array((255, 246, 250), dtype=np.float32)
+    accent = np.array((156, 74, 46), dtype=np.float32)
+    core = np.array((96, 42, 30), dtype=np.float32)
     t0 = float(section["start"])
     frames = int(section["frames"])
     out = cursor_video_path(work_dir, section["index"])
-
-    flat = []
-    for si, s in enumerate(systems):
-        for o in s["onsets"]:
-            o.setdefault("hold", o["t"] + 0.4)
-            flat.append((o["t"], o["hold"], si, o))
-    flat.sort(key=lambda r: r[0])
-    state = {"k": 0, "live": []}
 
     cmd = [FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
            "-f", "rawvideo", "-pix_fmt", "rgba",
@@ -86,7 +86,7 @@ def _build(section, notes_path, work_dir):
     try:
         for n in range(frames):
             t = t0 + n / FPS
-            layer = _compose(t, t0, systems, starts, accent, core, flat, state)
+            layer = _compose(t, systems, starts, accent, core, scroll_meta)
             proc.stdin.write(layer.tobytes())
     finally:
         proc.stdin.close()
@@ -96,38 +96,46 @@ def _build(section, notes_path, work_dir):
     return out
 
 
-def _compose(t, t0, systems, starts, accent, core, flat, state):
+def _scroll_y(t, idx, systems, meta):
+    """Same staircase scroll as the ffmpeg crop expression."""
+    sys_ = systems[idx]
+    pad = meta["pad"]
+    drift = meta["drift"]
+    y0 = sys_["roll_y"] - pad
+    s0 = sys_["start"]
+    s1 = sys_.get("end")
+    if s1 is None or idx >= len(systems) - 1:
+        return y0 + drift * (t - s0)
+    trans_start = max(s0, s1 - meta["transition"])
+    if t < trans_start:
+        return y0 + min(drift * (t - s0), meta["drift_max"])
+    y_end = y0 + min(drift * (trans_start - s0), meta["drift_max"])
+    target_next = systems[idx + 1]["roll_y"] - pad
+    p = min(1.0, max(0.0, (t - trans_start) / meta["transition"]))
+    smooth = p * p * (3 - 2 * p)
+    return y_end + (target_next - y_end) * smooth
+
+
+def _compose(t, systems, starts, accent, core, scroll_meta):
     layer = np.zeros((WIN_H, WIN_W, 4), dtype=np.float32)
-    scroll = (t - t0) * SPEED
 
-    # Every onset still sounding keeps its noteheads lit, so a held chord
-    # stays highlighted until the notes are actually released.
-    k = state["k"]
-    live = [a for a in state["live"] if a[1] + GLOW_OUT >= t]
-    while k < len(flat) and flat[k][0] <= t:
-        if flat[k][1] + GLOW_OUT >= t:
-            live.append(flat[k])
-        k += 1
-    state["k"] = k
-    state["live"] = live
-    for ot, hold, si, onset in live:
-        sys_ = systems[si]
-        y_top = sys_["roll_y"] - scroll
-        if y_top + sys_["img_h"] < 0 or y_top > WIN_H:
-            continue
-        mul = min(1.0, (t - ot) / GLOW_IN, (hold + GLOW_OUT - t) / GLOW_OUT)
-        if mul <= 0.0:
-            continue
-        for hx, hy in onset["heads"]:
-            cx = int(round(sys_["img_x"] + hx * sys_["img_w"]))
-            cy = int(round(y_top + hy * sys_["img_h"]))
-            _paste_glow(layer, cx, cy, accent, mul)
-
+    # The system currently under the cursor. bisect_right makes the boundary
+    # frame belong to the next system, matching the scroll expression.
     idx = bisect.bisect_right(starts, t) - 1
     if idx < 0:
         idx = 0
-    sys_ = systems[min(idx, len(systems) - 1)]
+    idx = min(idx, len(systems) - 1)
+    sys_ = systems[idx]
     times = sys_["times"]
+    scroll = _scroll_y(t, idx, systems, scroll_meta)
+
+    img_x = sys_["img_x"]
+    img_w = sys_["img_w"]
+    img_h = sys_["img_h"]
+    y_top = sys_["roll_y"] - scroll
+    y_bot = y_top + img_h
+    if y_bot < 0 or y_top > WIN_H:
+        return np.clip(layer, 0, 255).astype(np.uint8)
 
     # Glide from the last sounding onset to the next one.
     pos = bisect.bisect_right(times, t) - 1
@@ -136,7 +144,7 @@ def _compose(t, t0, systems, starts, accent, core, flat, state):
     else:
         current = sys_["onsets"][pos]
         x_norm = current["x"]
-        if pos + 1 < len(sys_["onsets"]):
+        if pos + 1 < len(times):
             nxt = sys_["onsets"][pos + 1]
             span = nxt["t"] - current["t"]
             if span > 1e-6:
@@ -144,19 +152,30 @@ def _compose(t, t0, systems, starts, accent, core, flat, state):
                 smooth = p * p * (3 - 2 * p)
                 x_norm = current["x"] + (nxt["x"] - current["x"]) * smooth
 
-    y_top = sys_["roll_y"] - scroll
-    y_bot = y_top + sys_["img_h"]
-    if y_bot < 0 or y_top > WIN_H:
-        return np.clip(layer, 0, 255).astype(np.uint8)
+    # Teal glow on every notehead that is currently sounding. A held chord
+    # keeps glowing until the last note of the chord is released.
+    for onset in sys_["onsets"]:
+        start = onset["t"]
+        hold = onset.get("hold", start + 0.4)
+        if t < start or t > hold + GLOW_OUT:
+            continue
+        mul = min(1.0, (t - start) / GLOW_IN if GLOW_IN else 1.0,
+                  (hold + GLOW_OUT - t) / GLOW_OUT if GLOW_OUT else 1.0)
+        if mul <= 0.0:
+            continue
+        for hx, hy in onset["heads"]:
+            cx = int(round(img_x + hx * img_w))
+            cy = int(round(y_top + hy * img_h))
+            _paste_glow(layer, cx, cy, mul)
 
-    # Vertical cursor line through the staff.
-    cx = int(round(sys_["img_x"] + x_norm * sys_["img_w"]))
+    # Playhead line on top of the glows.
+    cx = int(round(img_x + x_norm * img_w))
     _draw_line(layer, cx, y_top, y_bot, accent, core)
 
     return np.clip(layer, 0, 255).astype(np.uint8)
 
 
-def _paste_glow(layer, cx, cy, accent, mul=1.0):
+def _paste_glow(layer, cx, cy, mul):
     x0 = cx - GLOW_W // 2
     y0 = cy - GLOW_H // 2
     x1, y1 = x0 + GLOW_W, y0 + GLOW_H
@@ -165,17 +184,12 @@ def _paste_glow(layer, cx, cy, accent, mul=1.0):
     x1, y1 = min(WIN_W, x1), min(WIN_H, y1)
     if x1 <= x0 or y1 <= y0:
         return
-    mask = GLOW[sy0:sy0 + (y1 - y0), sx0:sx0 + (x1 - x0)]
-    core = CORE[sy0:sy0 + (y1 - y0), sx0:sx0 + (x1 - x0)]
+    mask = GLOW[sy0:sy0 + (y1 - y0), sx0:sx0 + (x1 - x0)] * np.float32(mul)
     sub = layer[y0:y1, x0:x1]
-    sub[..., 3] = np.maximum(sub[..., 3],
-                             np.maximum(mask, core) * np.float32(mul))
-    hit = mask > 0
+    sub[..., 3] = np.maximum(sub[..., 3], mask)
+    hit = mask > 0.5
     for c in range(3):
-        sub[..., c] = np.where(hit, accent[c], sub[..., c])
-    chit = core > 0
-    for c in range(3):
-        sub[..., c] = np.where(chit, _CORE_RGB[c], sub[..., c])
+        sub[..., c] = np.where(hit, _GLOW_RGB[c], sub[..., c])
 
 
 def _draw_line(layer, cx, y_top, y_bot, accent, core):

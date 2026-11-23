@@ -1,9 +1,10 @@
-"""Engraved, time-synced score strip for the floating score panel.
+"""Engraved, time-synced scrolling paper score for the floating score panel.
 
 The notation is built from the same notes the audio is rendered from, so the
 staff and the performance cannot drift. Each section is engraved once into a
-tall RGBA strip; ffmpeg crops it at a constant rate, putting every bar under
-the playhead exactly when it sounds.
+tall RGBA roll; ffmpeg crops it at a constant slow rate, putting every bar
+under the playhead exactly when it sounds. The paper stays bright and opaque,
+and the noteheads light up as they are played.
 """
 import bisect
 import io
@@ -12,6 +13,7 @@ import os
 import re
 from collections import defaultdict
 
+import numpy as np
 import resvg_py
 import verovio
 from PIL import Image, ImageDraw, ImageFilter
@@ -19,24 +21,28 @@ from PIL import Image, ImageDraw, ImageFilter
 from config import FPS
 from render.scene import load_font, palette
 
-PANEL_X, PANEL_Y = 960, 52
-PANEL_W, PANEL_H = 888, 372
+PANEL_X, PANEL_Y = 960, 32
+# One large static system per page. The panel is taller than the old scrolling
+# strip so the notation can be read like a printed sheet instead of racing by.
+PANEL_W, PANEL_H = 900, 520
 FRAME_PAD = 26
-HEADER_H = 46
+HEADER_H = 58
 INSET = 16
 WIN_X = PANEL_X + INSET
 WIN_Y = PANEL_Y + HEADER_H
 WIN_W = PANEL_W - 2 * INSET
 WIN_H = PANEL_H - HEADER_H - INSET
-SPEED = 15.0                     # score pixels per second
-CROP_EXPR = f"(n*{int(SPEED)}/{FPS})"
-PLAYHEAD = 0.55                  # fraction of the window above the cursor
-TARGET_SYSTEM_SEC = 11.5
+SPEED = 18.0                     # vertical layout spacing per second of music
+SCROLL_DRIFT = 4.0               # slow crawl while a system is playing
+SCROLL_DRIFT_MAX = 52.0          # cap before the run-up to the next system
+SCROLL_TRANSITION = 1.6          # seconds to scroll the next system into place
+PLAYHEAD = 0.32                  # fraction of the window at the reading line
+TARGET_SYSTEM_SEC = 11.5         # old scroll spacing: 3-4 bars per system
 QUANT = 0.25                     # 16th-note grid
 
-SCORE_RGB = (236, 242, 250)
-PANEL_RGB = (10, 13, 20)
-PANEL_ALPHA = 202
+SCORE_RGB = (34, 29, 22)
+PANEL_RGB = (241, 225, 198)
+PANEL_ALPHA = 255
 
 DIVISIONS = 4                    # per quarter note -> 16th-note grid
 BAR16 = 16
@@ -65,7 +71,7 @@ _NOTATABLE = (4.0, 3.0, 2.0, 1.5, 1.0, 0.75, 0.5, 0.25)
 _VEROVIO_OPTS = {
     "pageWidth": 1100,
     "pageHeight": 380,
-    "scale": 60,
+    "scale": 88,
     "adjustPageHeight": 1,
     "header": "none",
     "footer": "none",
@@ -84,12 +90,41 @@ def panel_paths(work_dir, index):
 
 
 def build_score_assets(section, notes, work_dir):
-    """Return (roll_png, frame_png) or None if engraving is unavailable."""
+    """Return (roll_png, frame_png, notes_json, crop_expr) or None."""
     try:
         return _build(section, notes, work_dir)
     except Exception as exc:
         print(f"[score] section {section['index']}: score panel disabled ({exc})")
         return None
+
+
+def _scroll_crop_expr(systems, section_start, pad):
+    """Crop-y expression: crawl while a system plays, scroll to the next one.
+
+    The old constant scroll moved a whole system height during playback, so
+    the sounding note climbed to the top of the panel. This keeps the current
+    system near the reading line: a 3 px/s drift while it plays, then a smooth
+    one-second run-up so the next system is in place before its first note.
+    """
+    rel = [s["start"] - section_start for s in systems]
+    last = systems[-1]
+    expr = (f"({last['roll_y'] - pad:.3f}+"
+            f"{SCROLL_DRIFT:.3f}*(t-{rel[-1]:.4f}))")
+    for i in range(len(systems) - 2, -1, -1):
+        s0, s1 = rel[i], rel[i + 1]
+        y0 = systems[i]["roll_y"] - pad
+        trans_start = max(s0, s1 - SCROLL_TRANSITION)
+        y_end = y0 + min(SCROLL_DRIFT * max(0.0, trans_start - s0),
+                         SCROLL_DRIFT_MAX)
+        target_next = systems[i + 1]["roll_y"] - pad
+        p = f"((t-{trans_start:.4f})/{SCROLL_TRANSITION:.4f})"
+        smooth = f"({p}*{p}*(3-2*{p}))"
+        drift = (f"({y0:.3f}+min({SCROLL_DRIFT:.3f}*(t-{s0:.4f}),"
+                 f"{SCROLL_DRIFT_MAX:.3f}))")
+        lerp = f"({y_end:.3f}+({target_next - y_end:.3f})*{smooth})"
+        expr = (f"if(lt(t,{s1:.4f}),"
+                f"if(lt(t,{trans_start:.4f}),{drift},{lerp}),{expr})")
+    return expr
 
 
 def _build(section, notes, work_dir):
@@ -100,15 +135,23 @@ def _build(section, notes, work_dir):
     bar_sec = 240.0 / bpm
     total_bars = max(1, int(round(sec_dur / bar_sec)))
     target = max(1, min(6, int(round(TARGET_SYSTEM_SEC / bar_sec))))
-    # Floor rather than round: a remainder system of one or two bars renders
-    # far smaller than the rest, so keep every system at least `target` bars.
+    # Floor rather than round: a short remainder system would render smaller
+    # than the rest, so keep every system at least `target` bars.
     systems = max(1, total_bars // target)
     base, extra = divmod(total_bars, systems)
     sizes = [base + 1] * extra + [base] * (systems - extra)
 
     pad = int(round(WIN_H * PLAYHEAD))
     height = pad + int(round(sec_dur * SPEED)) + WIN_H + 8
-    roll = Image.new("RGBA", (WIN_W, height), PANEL_RGB + (PANEL_ALPHA,))
+    # Opaque warm paper with a very light grain, so the score reads as a
+    # printed sheet instead of glowing lines on a dark rectangle.
+    paper = np.empty((height, WIN_W, 4), dtype=np.uint8)
+    paper[:, :, :3] = PANEL_RGB
+    paper[:, :, 3] = PANEL_ALPHA
+    grain = np.random.default_rng(7).normal(0, 2.2, (height, WIN_W, 1))
+    paper[:, :, :3] = np.clip(paper[:, :, :3].astype(np.float32) + grain,
+                              0, 255).astype(np.uint8)
+    roll = Image.fromarray(paper, "RGBA")
 
     bar_start = 0
     sys_geom = []
@@ -124,6 +167,23 @@ def _build(section, notes, work_dir):
         if engraved is None:
             continue
         img, onsets = engraved
+
+        # Trim Verovio's transparent page margins before scaling. The ink then
+        # fills the scroll band, so notes are larger at the same crawl speed.
+        ow, oh = img.size
+        bbox = img.getchannel("A").getbbox()
+        if bbox:
+            bx0, by0, bx1, by1 = bbox
+            img = img.crop(bbox)
+            nw, nh = img.size
+            for onset in onsets:
+                heads = [((hx * ow - bx0) / nw, (hy * oh - by0) / nh)
+                         for hx, hy in onset["heads"]]
+                onset["heads"] = heads
+                if heads:
+                    onset["x"] = sum(h[0] for h in heads) / len(heads)
+                else:
+                    onset["x"] = (onset["x"] * ow - bx0) / nw
 
         max_w, max_h = WIN_W - 26, max(24, block_h - 12)
         scale = min(max_w / img.width, max_h / img.height)
@@ -145,12 +205,19 @@ def _build(section, notes, work_dir):
             "onsets": onsets,
         })
 
+    for i, sys_ in enumerate(sys_geom):
+        sys_["end"] = (sys_geom[i + 1]["start"] if i + 1 < len(sys_geom)
+                       else float(section["end"]))
+
     roll_path, frame_path, notes_path = panel_paths(work_dir, section["index"])
     roll.save(roll_path)
     with open(notes_path, "w", encoding="utf-8") as fh:
-        json.dump({"speed": SPEED, "pad": pad, "systems": sys_geom}, fh)
+        json.dump({"layout_speed": SPEED, "pad": pad,
+                   "drift": SCROLL_DRIFT, "drift_max": SCROLL_DRIFT_MAX,
+                   "transition": SCROLL_TRANSITION, "systems": sys_geom}, fh)
     _make_frame(section, bpm, key_name).save(frame_path)
-    return roll_path, frame_path, notes_path
+    crop_expr = _scroll_crop_expr(sys_geom, float(section["start"]), pad)
+    return roll_path, frame_path, notes_path, crop_expr
 
 
 def _key_fifths(key_name):
@@ -458,11 +525,20 @@ def _make_frame(section, bpm, key_name):
     canvas = Image.new("RGBA", (PANEL_W + 2 * FRAME_PAD,
                                 PANEL_H + 2 * FRAME_PAD), (0, 0, 0, 0))
 
-    shadow = Image.new("RGBA", (PANEL_W, PANEL_H), (0, 0, 0, 0))
+    # Drop shadow only outside the panel. The notation window is transparent,
+    # so a shadow canvas covering the panel interior would show through it and
+    # tint the cream paper almost black.
+    shadow_pad = 28
+    shadow = Image.new("RGBA", (PANEL_W + 2 * shadow_pad,
+                                PANEL_H + 2 * shadow_pad), (0, 0, 0, 0))
     ImageDraw.Draw(shadow).rounded_rectangle(
-        (0, 0, PANEL_W - 1, PANEL_H - 1), radius=16, fill=(0, 0, 0, 155))
+        (shadow_pad, shadow_pad, shadow_pad + PANEL_W - 1,
+         shadow_pad + PANEL_H - 1), radius=16, fill=(0, 0, 0, 155))
     shadow = shadow.filter(ImageFilter.GaussianBlur(16))
-    canvas.alpha_composite(shadow, (FRAME_PAD - 4, FRAME_PAD + 6))
+    shadow.paste((0, 0, 0, 0), (shadow_pad, shadow_pad,
+                                shadow_pad + PANEL_W, shadow_pad + PANEL_H))
+    canvas.alpha_composite(shadow, (FRAME_PAD - shadow_pad - 4,
+                                    FRAME_PAD - shadow_pad + 6))
 
     img = Image.new("RGBA", (PANEL_W, PANEL_H), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -476,30 +552,37 @@ def _make_frame(section, bpm, key_name):
     draw.rectangle((INSET, HEADER_H, INSET + WIN_W - 1, HEADER_H + WIN_H - 1),
                    outline=pal["accent"] + (40,), width=1)
 
-    # Soft fades at the window edges so notation does not hard-cut while scrolling.
+    # Soft paper-coloured fades at the window edges hide the scroll cut without
+    # darkening the sheet.
     fade_h = 24
     for i in range(fade_h):
-        alpha = int(228 * (1 - i / fade_h) ** 1.3)
+        alpha = int(220 * (1 - i / fade_h) ** 1.2)
         draw.line((INSET, HEADER_H + i, INSET + WIN_W - 1, HEADER_H + i),
                   fill=PANEL_RGB + (alpha,))
         draw.line((INSET, HEADER_H + WIN_H - 1 - i, INSET + WIN_W - 1,
                    HEADER_H + WIN_H - 1 - i), fill=PANEL_RGB + (alpha,))
 
-    pill_w, pill_h = 108, 20
-    draw.rounded_rectangle((18, 13, 18 + pill_w, 13 + pill_h), radius=6,
-                           fill=pal["accent"] + (32,),
-                           outline=pal["accent"] + (150,), width=1)
-    draw.text((27, 16), "SHEET MUSIC", font=load_font("sans", 10),
-              fill=pal["accent"] + (235,))
+    # Larger header type: the old 10-17 px labels were unreadable at video size.
+    pill_text = "SHEET MUSIC"
+    pill_font = load_font("sans", 15)
+    pill_text_w = draw.textlength(pill_text, font=pill_font)
+    pill_w, pill_h = int(pill_text_w) + 30, 32
+    pill_x, pill_y = 18, 13
+    draw.rounded_rectangle((pill_x, pill_y, pill_x + pill_w, pill_y + pill_h),
+                           radius=8, fill=(78, 54, 34, 235),
+                           outline=(198, 158, 94, 205), width=1)
+    draw.text((pill_x + 15, pill_y + 7), pill_text, font=pill_font,
+              fill=(246, 236, 216, 250))
 
-    draw.text((146, 11), section["name"], font=load_font("serif", 17),
-              fill=pal["title"] + (245,))
+    name_x = pill_x + pill_w + 20
+    draw.text((name_x, 4), section["name"], font=load_font("serif", 32),
+              fill=(62, 44, 28, 255))
 
     meta = f"{key_name}  ·  {int(round(bpm))} BPM"
-    meta_font = load_font("sans", 11)
+    meta_font = load_font("sans", 17)
     meta_w = draw.textlength(meta, font=meta_font)
-    draw.text((PANEL_W - 18 - meta_w, 16), meta, font=meta_font,
-              fill=pal["title"] + (150,))
+    draw.text((PANEL_W - 20 - meta_w, 23), meta, font=meta_font,
+              fill=(100, 72, 46, 240))
 
     canvas.alpha_composite(img, (FRAME_PAD, FRAME_PAD))
     return canvas
