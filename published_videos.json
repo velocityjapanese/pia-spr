@@ -761,5 +761,42 @@
       }
     ],
     "timestamp": "2026-11-26T18:16:37.348530+00:00"
+  },
+  {
+    "video_file": "PianoSpheric_15min_20261127_174147.mp4",
+    "youtube_id": "TFnbKJbpGr0",
+    "youtube_url": "https://youtu.be/TFnbKJbpGr0",
+    "facebook_id": null,
+    "facebook_url": null,
+    "title": "15 Min Relaxing Piano | Valse beyond the Quiet Dawn · Original Cinematic Suite",
+    "piece_title": "Valse beyond the Quiet Dawn",
+    "seed": 486576314,
+    "chapters": [
+      {
+        "time": "00:00",
+        "title": "I. Dusk"
+      },
+      {
+        "time": "02:45",
+        "title": "II. Ascent"
+      },
+      {
+        "time": "05:25",
+        "title": "III. Horizon"
+      },
+      {
+        "time": "07:51",
+        "title": "IV. Reverie"
+      },
+      {
+        "time": "10:40",
+        "title": "V. Awakening"
+      },
+      {
+        "time": "12:48",
+        "title": "VI. Stillness"
+      }
+    ],
+    "timestamp": "2026-11-27T18:01:51.917666+00:00"
   }
 ]
